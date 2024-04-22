@@ -752,6 +752,7 @@ void AdminModule::reboot(int32_t seconds)
 {
     LOG_INFO("Rebooting in %d seconds\n", seconds);
     screen->startRebootScreen();
+    nodeDB->saveToDisk(SEGMENT_DEVICESTATE);
     rebootAtMsec = (seconds < 0) ? 0 : (millis() + seconds * 1000);
 }
 
