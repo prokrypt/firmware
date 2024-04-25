@@ -672,16 +672,21 @@ bool NodeDB::saveProto(const char *filename, size_t protoSize, const pb_msgdesc_
         } else {
             okay = true;
         }
+        LOG_INFO("Flushing %s\n", filename);
         f.flush();
+        LOG_INFO("Closing %s\n", filename);
         f.close();
 
         // brief window of risk here ;-)
+        LOG_INFO("Removing %s\n", filename);
         if (FSCom.exists(filename) && !FSCom.remove(filename)) {
             LOG_WARN("Can't remove old pref file\n");
         }
+        LOG_INFO("Renaming for %s\n", filename);
         if (!renameFile(filenameTmp.c_str(), filename)) {
             LOG_ERROR("Error: can't rename new pref file\n");
         }
+        LOG_INFO("Renaming finished\n", filename);
     } else {
         LOG_ERROR("Can't write prefs\n");
 #ifdef ARCH_NRF52
@@ -909,6 +914,8 @@ bool NodeDB::updateUser(uint32_t nodeId, const meshtastic_User &p, uint8_t chann
         notifyObservers(true); // Force an update whether or not our node counts have changed
 
         // We just changed something about the user, store our DB
+        // Nope!
+        return changed;
         Throttle::execute(
             &lastNodeDbSave, ONE_MINUTE_MS, []() { nodeDB->saveToDisk(SEGMENT_DEVICESTATE); },
             []() { LOG_DEBUG("Deferring NodeDB saveToDisk for now, since we saved less than a minute ago\n"); });
