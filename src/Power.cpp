@@ -605,7 +605,7 @@ void Power::readPowerStatus()
             if (batteryVoltageMv < OCV[NUM_OCV_POINTS - 2]) {
                 if (batteryVoltageMv > (OCV[NUM_OCV_POINTS - 1] - 100) ) {
                     low_voltage_counter++;
-                    LOG_DEBUG("Low voltage counter: %d/10\n", low_voltage_counter);
+                    LOG_DEBUG("Low voltage counter: %d/3\n", low_voltage_counter);
                     if (low_voltage_counter == 3) {
                         LOG_INFO("Low voltage detected, saving NodeDB...\n");
                         nodeDB->saveToDisk(SEGMENT_DEVICESTATE);
