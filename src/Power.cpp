@@ -400,7 +400,7 @@ AnalogBatteryLevel analogLevel;
 Power::Power() : OSThread("Power")
 {
     statusHandler = {};
-    low_voltage_counter = 0;
+    low_voltage_counter = 11;
 #ifdef DEBUG_HEAP
     lastheap = memGet.getFreeHeap();
 #endif
@@ -491,7 +491,7 @@ bool Power::setup()
     bool found = axpChipInit() || analogInit();
 
     enabled = found;
-    low_voltage_counter = 0;
+    low_voltage_counter = 11;
 
     return found;
 }
@@ -599,24 +599,24 @@ void Power::readPowerStatus()
 
 #endif
 
-        // If we have a battery at all and it is less than 0%, force deep sleep if we have more than 10 low readings in
-        // a row. NOTE: min LiIon/LiPo voltage is 2.0 to 2.5V, current OCV min is set to 3100 that is large enough.
-        //
+        // If we have a battery at all and it is less than 3.3v, save NodeDB if we have a few low readings in a row.
+        // NOTE: min LiIon/LiPo voltage is 2.0 to 2.5V. We have from 3.3v to 3.0v to detect low voltage.
         if (powerStatus2.getHasBattery() && !powerStatus2.getHasUSB()) {
-            if (batteryLevel->getBattVoltage() < OCV[NUM_OCV_POINTS - 1]) {
-                low_voltage_counter++;
-                LOG_DEBUG("Low voltage counter: %d/10\n", low_voltage_counter);
-                if (low_voltage_counter > 10) {
-#ifdef ARCH_NRF52
-                    // We can't trigger deep sleep on NRF52, it's freezing the board
-                    LOG_DEBUG("Low voltage detected, but not triggering deep sleep\n");
-#else
-                    LOG_INFO("Low voltage detected, triggering deep sleep\n");
-                    powerFSM.trigger(EVENT_LOW_BATTERY);
-#endif
+            if (batteryVoltageMv < OCV[NUM_OCV_POINTS - 2]) {
+                if (batteryVoltageMv > (OCV[NUM_OCV_POINTS - 1] - 100) ) {
+                    low_voltage_counter++;
+                    LOG_DEBUG("Low voltage counter: %d/10\n", low_voltage_counter);
+                    if (low_voltage_counter == 3) {
+                        LOG_INFO("Low voltage detected, saving NodeDB...\n");
+                        nodeDB->saveToDisk(SEGMENT_DEVICESTATE);
+                    }
                 }
             } else {
-                low_voltage_counter = 0;
+                // Reset counter if we haven't hit threshold, otherwise reset counter if battery voltage has recovered fully.
+                if (low_voltage_counter < 3)
+                    low_voltage_counter = 0;
+                else if (batteryVoltageMv > OCV[0])
+                    low_voltage_counter = 0;
             }
         }
     } else {

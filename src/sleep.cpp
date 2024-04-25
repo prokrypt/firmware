@@ -207,6 +207,8 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false)
         LOG_INFO("Entering deep sleep for %u seconds\n", msecToWake / 1000);
     }
 
+    nodeDB->saveToDisk(SEGMENT_DEVICESTATE);
+
     // not using wifi yet, but once we are this is needed to shutoff the radio hw
     // esp_wifi_stop();
     waitEnterSleep(skipPreflight);
@@ -228,8 +230,6 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false)
 #endif
 
     screen->doDeepSleep(); // datasheet says this will draw only 10ua
-
-    nodeDB->saveToDisk();
 
 #ifdef TTGO_T_ECHO
 #ifdef PIN_POWER_EN
