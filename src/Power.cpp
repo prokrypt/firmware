@@ -603,7 +603,7 @@ void Power::readPowerStatus()
         // NOTE: min LiIon/LiPo voltage is 2.0 to 2.5V. We have from 3.3v to 3.0v to detect low voltage.
         if (powerStatus2.getHasBattery() && !powerStatus2.getHasUSB()) {
             if (batteryVoltageMv < OCV[NUM_OCV_POINTS - 1]) {
-                if (batteryVoltageMv > (OCV[NUM_OCV_POINTS - 1] - 100) ) {
+                if (batteryVoltageMv > (OCV[NUM_OCV_POINTS - 1] - 150) ) {
                     low_voltage_counter++;
                     LOG_DEBUG("Low voltage counter: %d/3\n", low_voltage_counter);
                     if (low_voltage_counter == 3) {
@@ -616,6 +616,8 @@ void Power::readPowerStatus()
                 if (low_voltage_counter < 3)
                     low_voltage_counter = 0;
                 else if (batteryVoltageMv > OCV[1])
+                    if (low_voltage_counter > 10)
+                        LOG_INFO("Enabling low-voltage NodeDB save...\n");
                     low_voltage_counter = 0;
             }
         }
