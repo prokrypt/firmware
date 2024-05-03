@@ -599,10 +599,10 @@ void Power::readPowerStatus()
 
 #endif
 
-        // If we have a battery at all and it is less than 3.1v, save NodeDB if we have a few low readings in a row.
-        // NOTE: min LiIon/LiPo voltage is 2.0 to 2.5V. We have from 3.3v to 3.0v to detect low voltage.
+        // If we have a battery at all and it is less than 3.2v, save NodeDB if we have a few low readings in a row.
+        // NOTE: min LiIon/LiPo voltage is 2.0 to 2.5V. We have from 3.2v to 2.95v to detect low voltage.
         if (powerStatus2.getHasBattery() && !powerStatus2.getHasUSB()) {
-            if (batteryVoltageMv < OCV[NUM_OCV_POINTS - 1]) {
+            if (batteryVoltageMv < OCV[NUM_OCV_POINTS - 1]+100) {
                 if (batteryVoltageMv > (OCV[NUM_OCV_POINTS - 1] - 150) ) {
                     low_voltage_counter++;
                     LOG_DEBUG("Low voltage counter: %d/3\n", low_voltage_counter);
