@@ -2,6 +2,7 @@
 #include "Channels.h"
 #include "CryptoEngine.h"
 #include "DisplayFormatters.h"
+#include "FlashGuard.h"
 #include "HardwareRNG.h"
 #include "MeshService.h"
 #include "NodeDB.h"
@@ -108,6 +109,7 @@ static void writeSecret(char *buf, size_t bufsz, const char *currentVal)
  */
 bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_AdminMessage *r)
 {
+    FlashGuard::Scope userWrite("admin");
     // if handled == false, then let others look at this message also if they want
     bool handled = false;
     assert(r);

@@ -1,4 +1,5 @@
 #if !MESHTASTIC_EXCLUDE_WEBSERVER
+#include "FlashGuard.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "RadioLibInterface.h"
@@ -390,6 +391,7 @@ void handleFsDeleteStatic(HTTPRequest *req, HTTPResponse *res)
         std::string pathDelete = "/" + paramValDelete;
         bool removed;
         {
+            FlashGuard::Scope userWrite("web file delete");
             concurrency::LockGuard g(spiLock);
             removed = FSCom.remove(pathDelete.c_str());
         }
@@ -506,6 +508,7 @@ void handleStatic(HTTPRequest *req, HTTPResponse *res)
 
 void handleFormUpload(HTTPRequest *req, HTTPResponse *res)
 {
+    FlashGuard::Scope userWrite("web file upload");
 
     LOG_DEBUG("Form Upload - Disable keep-alive");
     res->setHeader("Connection", "close");

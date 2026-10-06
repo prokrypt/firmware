@@ -709,7 +709,6 @@ class NodeDB
     // enough room to create it safely at boot. A later boot retries the check.
     bool eventProfileStorageUnavailable = false;
 #endif
-    uint32_t lastNodeDbSave = 0;     // when we last saved our db to flash
     uint32_t lastFullEvictionMs = 0; // when we last evicted to admit a new node, once the db is full
     uint32_t lastBackupAttempt = 0;  // when we last tried a backup automatically or manually
     uint32_t lastSort = 0;           // When last sorted the nodeDB

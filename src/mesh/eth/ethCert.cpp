@@ -1,3 +1,4 @@
+#include "FlashGuard.h"
 #include "configuration.h"
 
 #if HAS_ETHERNET && defined(HAS_ETHERNET_TLS_API) && defined(ARCH_RP2040)
@@ -62,6 +63,8 @@ static bool readBinary(const char *path, std::vector<uint8_t> &out)
 
 static bool writeBinary(const char *path, const uint8_t *buf, size_t len)
 {
+    if (!FlashGuard::noteWrite(path))
+        return false;
     File f = FSCom.open(path, FILE_O_WRITE);
     if (!f)
         return false;
@@ -85,6 +88,8 @@ static bool readText(const char *path, String &out)
 
 static bool writeText(const char *path, const String &s)
 {
+    if (!FlashGuard::noteWrite(path))
+        return false;
     File f = FSCom.open(path, FILE_O_WRITE);
     if (!f)
         return false;

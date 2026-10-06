@@ -384,7 +384,7 @@ static void test_absentSubmessages_noSatelliteGhostRows(void)
 // bytes) whose 25-byte slim copy cuts a multi-byte sequence in half. Without
 // migration's sanitizeUtf8, the orphaned lead byte makes the next
 // saveNodeDatabaseToDisk() fail its PB_VALIDATE_UTF8 encode - and a failed
-// save is what triggers saveToDisk()'s fsFormat() wipe on device.
+// save loses the node DB (upstream: triggers a whole-FS fsFormat() wipe).
 static void test_truncatedWideName_sanitizedAndReencodable(void)
 {
     // 23 ASCII bytes then Euro signs straddling the 24-byte truncation boundary.

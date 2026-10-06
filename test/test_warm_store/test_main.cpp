@@ -1,6 +1,6 @@
 // Unit tests for the warm ("long-tail") node tier - src/mesh/WarmNodeStore.cpp.
 // Covers admission/eviction policy (keyed entries outrank keyless), take()
-// rehydration semantics, and a tolerant persistence round trip.
+// rehydration semantics, and that the tier never persists (favorites-only key storage).
 #include "MeshTypes.h" // BEFORE TestUtil.h - provides WARM_NODE_COUNT via mesh-pb-constants.h
 #include "TestUtil.h"
 #include <unity.h>
@@ -14,9 +14,9 @@
 #if WARM_NODE_COUNT > 0
 
 #include "FSCommon.h"
+#include "FlashGuard.h"
 #include "mesh/WarmNodeStore.h"
 #include <cstring>
-#include <vector>
 
 namespace
 {
@@ -208,179 +208,35 @@ void test_ws_remove_and_clear()
     TEST_ASSERT_EQUAL(0, ws.count());
 }
 
-void test_ws_persistence_roundTrip()
+// Favorites-only key storage: warm entries are evicted non-favorites, so the tier must never write
+// flash (FlashGuard sees every write), and eraseFlash() must remove a warm.dat left by older firmware.
+void test_ws_isRamOnly_eraseFlashRemovesLegacyFile()
 {
-    WarmNodeStore a;
-    uint8_t key[32], got[32];
-    makeKey(key, 0x55);
-    a.absorb(0x600, 4242, key);
-    a.absorb(0x601, 4243, NULL);
-    if (!a.saveIfDirty()) {
-        TEST_IGNORE_MESSAGE("Filesystem not available in this test environment");
-        return;
-    }
-
-    WarmNodeStore b;
-    b.load();
-    TEST_ASSERT_TRUE(b.contains(0x600));
-    TEST_ASSERT_TRUE(b.contains(0x601));
-    TEST_ASSERT_TRUE(b.copyKey(0x600, got));
-    TEST_ASSERT_EQUAL_MEMORY(key, got, 32);
-
-    // Cleanup so reruns start fresh
-    b.clear();
-    b.saveIfDirty();
-}
-
-// Migration: a v1 (WRM1) warm.dat must keep identity + key but discard last_heard
-// (so its low bits aren't misread as role/protected). File backend only.
-void test_ws_v1_migration_discardsLastHeard()
-{
-    WarmNodeStore a;
-    uint8_t key[32], got[32];
-    makeKey(key, 0x66);
-    a.absorb(0x900, 123456, key, 5 /* TRACKER */, (uint8_t)WarmProtected::Role);
-    if (!a.saveIfDirty()) {
-        TEST_IGNORE_MESSAGE("Filesystem not available in this test environment");
-        return;
-    }
-
-    // Read the whole v2 file, flip the 4-byte header magic to v1 ("WRM1"), write it back.
-    // (CRC covers only the entry bytes, so patching the header magic keeps it valid.)
-    std::vector<uint8_t> buf;
-    {
-        auto f = FSCom.open("/prefs/warm.dat", FILE_O_READ);
-        if (!f) {
-            TEST_IGNORE_MESSAGE("warm.dat not readable in this environment");
-            return;
-        }
-        buf.resize(f.size());
-        f.read(buf.data(), buf.size());
-        f.close();
-    }
-    TEST_ASSERT_TRUE(buf.size() >= 4);
-    const uint32_t v1magic = 0x314D5257u; // "WRM1"
-    memcpy(buf.data(), &v1magic, sizeof(v1magic));
+    FSCom.mkdir("/prefs");
     {
         auto f = FSCom.open("/prefs/warm.dat", FILE_O_WRITE);
-        TEST_ASSERT_TRUE((bool)f);
-        f.write(buf.data(), buf.size());
-        f.close();
-    }
-
-    WarmNodeStore b;
-    b.load();
-    TEST_ASSERT_TRUE(b.contains(0x900));     // identity survived migration
-    TEST_ASSERT_TRUE(b.copyKey(0x900, got)); // public key survived
-    TEST_ASSERT_EQUAL_MEMORY(key, got, 32);
-    uint8_t role = 0xFF, prot = 0xFF;
-    TEST_ASSERT_TRUE(b.lookupMeta(0x900, role, prot));
-    TEST_ASSERT_EQUAL(0, role); // last_heard discarded → role/protected reset
-    TEST_ASSERT_EQUAL((uint8_t)WarmProtected::None, prot);
-
-    b.clear();
-    b.saveIfDirty();
-}
-
-// A v2 (WRM2) warm.dat used bit 6 as a timestamp bit, so loading one must not read it as
-// XEdDSA-signed, while role/protected/time carry over. File backend only.
-void test_ws_v2_migration_clearsXeddsaSignedBit()
-{
-    WarmNodeStore a;
-    uint8_t key[32], got[32];
-    makeKey(key, 0x67);
-    // xeddsaSigned=true sets bit 6, standing in for a v2 record whose timestamp had it set.
-    a.absorb(0x910, 123456, key, 5 /* TRACKER */, (uint8_t)WarmProtected::Role, /*xeddsaSigned=*/true);
-    if (!a.saveIfDirty()) {
-        TEST_IGNORE_MESSAGE("Filesystem not available in this test environment");
-        return;
-    }
-
-    // Flip the 4-byte header magic to v2 ("WRM2"). CRC covers only the entry bytes, so
-    // patching the header keeps it valid.
-    std::vector<uint8_t> buf;
-    {
-        auto f = FSCom.open("/prefs/warm.dat", FILE_O_READ);
         if (!f) {
-            TEST_IGNORE_MESSAGE("warm.dat not readable in this environment");
+            TEST_IGNORE_MESSAGE("Filesystem not available in this test environment");
             return;
         }
-        buf.resize(f.size());
-        const size_t got = f.read(buf.data(), buf.size());
-        f.close();
-        TEST_ASSERT_EQUAL_MESSAGE(buf.size(), got, "short read patching warm.dat");
-    }
-    TEST_ASSERT_TRUE(buf.size() >= 4);
-    const uint32_t v2magic = 0x324D5257u; // "WRM2"
-    memcpy(buf.data(), &v2magic, sizeof(v2magic));
-    {
-        auto f = FSCom.open("/prefs/warm.dat", FILE_O_WRITE);
-        TEST_ASSERT_TRUE((bool)f);
-        const size_t wrote = f.write(buf.data(), buf.size());
-        f.close();
-        TEST_ASSERT_EQUAL_MESSAGE(buf.size(), wrote, "short write patching warm.dat");
-    }
-
-    WarmNodeStore b;
-    b.load();
-    TEST_ASSERT_TRUE(b.contains(0x910));
-    TEST_ASSERT_TRUE(b.copyKey(0x910, got));
-    TEST_ASSERT_EQUAL_MEMORY(key, got, 32);
-
-    WarmNodeEntry e;
-    TEST_ASSERT_TRUE(b.take(0x910, e));
-    TEST_ASSERT_FALSE_MESSAGE(warmXeddsaSignedOf(e), "a v2 timestamp bit must not read as xeddsa-signed");
-    // Unlike v1, v2 kept role/protected/time in place, so they survive the migration.
-    TEST_ASSERT_EQUAL(123456u & WARM_TIME_MASK, warmTimeOf(e));
-    TEST_ASSERT_EQUAL(5, warmRoleOf(e));
-    TEST_ASSERT_EQUAL((uint8_t)WarmProtected::Role, warmProtOf(e));
-
-    b.clear();
-    b.saveIfDirty();
-}
-
-// Shrink safety: a warm.dat snapshot recording more entries than this build's
-// WARM_NODE_COUNT (e.g. written before a per-platform tier reduction) must be
-// rejected cleanly at the header check - load() starts empty instead of reading
-// past entries[]. (The nRF52840 raw-flash ring backend has no such cliff: it
-// replays records through place(), whose LRU admission keeps the newest.)
-void test_ws_load_rejectsOversizedSnapshot()
-{
-    WarmNodeStore a;
-    a.absorb(0xA00, 111, NULL);
-    if (!a.saveIfDirty()) {
-        TEST_IGNORE_MESSAGE("Filesystem not available in this test environment");
-        return;
-    }
-
-    // Patch the header's count field (offset 8) to one past capacity.
-    std::vector<uint8_t> buf;
-    {
-        auto f = FSCom.open("/prefs/warm.dat", FILE_O_READ);
-        if (!f) {
-            TEST_IGNORE_MESSAGE("warm.dat not readable in this environment");
-            return;
-        }
-        buf.resize(f.size());
-        f.read(buf.data(), buf.size());
-        f.close();
-    }
-    TEST_ASSERT_TRUE(buf.size() >= 16);
-    const uint16_t oversized = (uint16_t)(WARM_NODE_COUNT + 1);
-    memcpy(buf.data() + 8, &oversized, sizeof(oversized));
-    {
-        auto f = FSCom.open("/prefs/warm.dat", FILE_O_WRITE);
-        TEST_ASSERT_TRUE((bool)f);
-        f.write(buf.data(), buf.size());
+        f.write(reinterpret_cast<const uint8_t *>("legacy"), 6);
         f.close();
     }
 
-    WarmNodeStore b;
-    b.load();
-    TEST_ASSERT_EQUAL(0, b.count()); // rejected as invalid, started empty
+    const uint32_t writesBefore = FlashGuard::writesSinceBoot();
+    WarmNodeStore ws;
+    uint8_t key[32];
+    makeKey(key, 0x77);
+    WarmNodeEntry out;
+    ws.absorb(0x700, 1, key);
+    ws.absorb(0x701, 2, NULL);
+    ws.take(0x700, out);
+    ws.remove(0x701);
+    ws.clear();
+    TEST_ASSERT_EQUAL_UINT32(writesBefore, FlashGuard::writesSinceBoot());
 
-    b.clear();
-    b.saveIfDirty();
+    ws.eraseFlash();
+    TEST_ASSERT_FALSE(FSCom.exists("/prefs/warm.dat"));
 }
 
 WS_TEST_ENTRY void setup()
@@ -398,10 +254,7 @@ WS_TEST_ENTRY void setup()
     RUN_TEST(test_ws_meta_roundTrip);
     RUN_TEST(test_ws_xeddsaSigned_roundTrip);
     RUN_TEST(test_ws_remove_and_clear);
-    RUN_TEST(test_ws_persistence_roundTrip);
-    RUN_TEST(test_ws_v1_migration_discardsLastHeard);
-    RUN_TEST(test_ws_v2_migration_clearsXeddsaSignedBit);
-    RUN_TEST(test_ws_load_rejectsOversizedSnapshot);
+    RUN_TEST(test_ws_isRamOnly_eraseFlashRemovesLegacyFile);
     exit(UNITY_END());
 }
 

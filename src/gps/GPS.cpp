@@ -20,6 +20,7 @@
 #include "sleep.h"
 
 #include "FSCommon.h"
+#include "FlashGuard.h"
 #include "GPSUpdateScheduling.h"
 #include "SPILock.h"
 #include "SafeFile.h"
@@ -680,7 +681,7 @@ void GPS::clearProbeCache()
     cachedProbeModel = GNSS_MODEL_UNKNOWN;
 #ifdef FSCom
     spiLock->lock();
-    if (FSCom.exists(GPS_PROBE_CACHE_FILE)) {
+    if (FSCom.exists(GPS_PROBE_CACHE_FILE) && FlashGuard::noteWrite(GPS_PROBE_CACHE_FILE)) {
         FSCom.remove(GPS_PROBE_CACHE_FILE);
     }
     spiLock->unlock();

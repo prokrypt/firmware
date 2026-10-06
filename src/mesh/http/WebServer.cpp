@@ -1,5 +1,6 @@
 #include "configuration.h"
 #if !MESHTASTIC_EXCLUDE_WEBSERVER
+#include "FlashGuard.h"
 #include "NodeDB.h"
 #include "UptimeClock.h"
 #include "graphics/Screen.h"
@@ -239,8 +240,10 @@ static void taskCreateCert(void *parameter)
 
             LOG_DEBUG("Created Certificate: %d Bytes", cert->getCertLength());
 
-            prefs.putBytes("PK", (uint8_t *)cert->getPKData(), cert->getPKLength());
-            prefs.putBytes("cert", (uint8_t *)cert->getCertData(), cert->getCertLength());
+            if (FlashGuard::noteWrite("nvs https cert")) {
+                prefs.putBytes("PK", (uint8_t *)cert->getPKData(), cert->getPKLength());
+                prefs.putBytes("cert", (uint8_t *)cert->getCertData(), cert->getCertLength());
+            }
         }
     }
 

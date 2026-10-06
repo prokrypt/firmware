@@ -9,6 +9,7 @@
  *
  */
 #include "FSCommon.h"
+#include "FlashGuard.h"
 #include "SPILock.h"
 #include "configuration.h"
 
@@ -156,6 +157,8 @@ bool renameFile(const char *pathFrom, const char *pathTo)
 bool fsFormat()
 {
 #ifdef FSCom
+    if (!FlashGuard::noteWrite("fsFormat"))
+        return false;
 #if defined(ARCH_PORTDUINO)
     rmDir("/prefs");
     return FSBegin();

@@ -920,10 +920,9 @@ bool NodeDB::factoryReset(bool eraseBleBonds)
 #endif
 
 #if WARM_NODE_COUNT > 0
-    // On nRF52840 the warm tier lives in raw flash outside /prefs, so rmDir
-    // didn't touch it; clear it and persist the empty store.
+    // On nRF52840 old firmware kept the warm tier in raw flash outside /prefs, which rmDir misses.
     warmStore.clear();
-    warmStore.saveIfDirty();
+    warmStore.eraseFlash();
 #endif
 #if HAS_TRAFFIC_MANAGEMENT
     // Factory reset forgets everything; TMM's RAM caches must not survive to resurrect
@@ -1831,6 +1830,7 @@ void NodeDB::resetNodes(bool keepFavorites)
     (void)ourNum;
 #if WARM_NODE_COUNT > 0
     warmStore.clear(); // warm entries are never favorites; a DB reset clears them too
+    warmStore.eraseFlash();
 #endif
 #if HAS_TRAFFIC_MANAGEMENT
     // A user-initiated DB reset forgets everything; TMM's caches must not resurrect it.
@@ -2418,9 +2418,6 @@ void NodeDB::nodeDBSelfCare()
         LOG_MIGRATION("NodeDB self-care: healed store (nodes-over-cap:%s sats-trimmed:%s); rewriting nodes.proto once",
                       nodesOverCap ? "yes" : "no", satsTrimmed ? "yes" : "no");
         saveNodeDatabaseToDisk();
-#if WARM_NODE_COUNT > 0
-        warmStore.saveIfDirty();
-#endif
     }
 }
 
@@ -2614,12 +2611,6 @@ void NodeDB::loadFromDisk()
     // Left UNTRIMMED on purpose: trim/demote/satellite-cap/self-pin/rewrite all
     // run in nodeDBSelfCare() once getNodeNum() is valid (still 0 here on a cold
     // boot, so we could only assume index 0 == self - the very bug being fixed).
-#if WARM_NODE_COUNT > 0
-    // Load the warm tier so its on-disk snapshot is available before the node DB
-    // is exercised (and before nodeDBSelfCare() demotes any overflow into it).
-    warmStore.load();
-#endif
-
     // static DeviceState scratch; We no longer read into a tempbuf because this structure is 15KB of valuable RAM
     state = loadProto(deviceStateFileName, meshtastic_DeviceState_size, sizeof(meshtastic_DeviceState),
                       &meshtastic_DeviceState_msg, &devicestate);
@@ -3226,7 +3217,7 @@ bool NodeDB::saveNodeDatabaseToDisk()
     }
 
     // Defer (don't fail) while xmodem holds the prefs file handle. Returning false
-    // would propagate through saveToDisk() and trigger fsFormat() mid-transfer.
+    // would make saveToDisk() report a failure mid-transfer.
 #ifdef FSCom
     if (xModem.isBusy()) {
         LOG_DEBUG("Defer NodeDB save: xmodem in progress");
@@ -3311,16 +3302,6 @@ bool NodeDB::saveNodeDatabaseToDisk()
     nodeDatabase.environment.shrink_to_fit();
     nodeDatabase.status.clear();
     nodeDatabase.status.shrink_to_fit();
-#if WARM_NODE_COUNT > 0
-#ifdef ARCH_RP2040
-    // nodes.proto + warm.dat are written back-to-back without the loop running between them;
-    // reset the 8s HW watchdog so the second write gets a full budget (issue #10746).
-    watchdog_update();
-#endif
-    // Same cadence as the node DB; failure is logged but must not propagate -
-    // a false return from here would trigger saveToDisk()'s fsFormat() path.
-    warmStore.saveIfDirty();
-#endif
     return ok;
 }
 
@@ -3460,8 +3441,7 @@ bool NodeDB::saveToDisk(int saveWhat)
 
     bool success = saveToDiskNoRetry(saveWhat);
 
-    // A failed write is far more often a busy SoftDevice or a sagging rail than a corrupt filesystem,
-    // and the format below takes every file with it, so retry first and never format on a low rail.
+    // A failed write is far more often a busy SoftDevice or a sagging rail than a corrupt filesystem.
     for (int attempt = 1; !success && attempt <= 2; attempt++) {
         delay(150);
 #ifdef ARCH_RP2040
@@ -3475,46 +3455,14 @@ bool NodeDB::saveToDisk(int saveWhat)
         success = saveToDiskNoRetry(saveWhat);
     }
 
-    if (!success) {
-        if (!powerHAL_isPowerLevelSafe()) {
-            LOG_ERROR("saveToDisk() on unsafe device power level");
-            return false;
-        }
-#ifdef ARCH_RP2040
-        // Probe, format and resave run back-to-back from here with no retry loop left to feed it.
-        watchdog_update();
-#endif
-        // The format below takes every file with it, so spend one read proving it is warranted.
+    // Never format on our own judgement: wiping the filesystem is a user command (factory reset).
+    if (!success && powerHAL_isPowerLevelSafe()) {
         if (filesystemStillReadable()) {
-            LOG_ERROR("Save to disk failed but the filesystem still reads, not formatting (full or busy?)");
-            return false;
+            LOG_ERROR("Save to disk failed but the filesystem still reads (full or busy?)");
+        } else {
+            LOG_ERROR("Save to disk failed and the filesystem is unreadable; not formatting");
+            RECORD_CRITICALERROR(meshtastic_CriticalErrorCode_FLASH_CORRUPTION_UNRECOVERABLE);
         }
-        LOG_ERROR("Save to disk failed and the filesystem is unreadable, formatting");
-#ifdef MESHTASTIC_ENCRYPTED_STORAGE
-        // The format takes the DEK with it, and without it the resave below would land the keys in plaintext.
-        const bool lockdownWasActive = EncryptedStorage::isLockdownActive();
-#else
-        const bool lockdownWasActive = false;
-#endif
-        spiLock->lock();
-        const bool formatted = fsFormat();
-        spiLock->unlock();
-#ifdef ARCH_RP2040
-        // The five-segment resave below needs a budget of its own.
-        watchdog_update();
-#endif
-
-        // The format took every segment, not just the ones asked for, so all of them must land again.
-        if (!formatted)
-            LOG_ERROR("Filesystem format failed");
-        else if (lockdownWasActive)
-            LOG_ERROR("Lockdown DEK formatted away, not resaving in plaintext");
-        else
-            success = saveToDiskNoRetry(SEGMENT_CONFIG | SEGMENT_MODULECONFIG | SEGMENT_DEVICESTATE | SEGMENT_CHANNELS |
-                                        SEGMENT_NODEDATABASE);
-
-        RECORD_CRITICALERROR(success ? meshtastic_CriticalErrorCode_FLASH_CORRUPTION_RECOVERABLE
-                                     : meshtastic_CriticalErrorCode_FLASH_CORRUPTION_UNRECOVERABLE);
     }
 
     return success;
@@ -3896,16 +3844,6 @@ bool NodeDB::updateUser(uint32_t nodeId, meshtastic_User &p, uint8_t channelInde
     if (changed) {
         updateGUIforNode = info;
         notifyObservers(true); // Force an update whether or not our node counts have changed
-
-        // We just changed something about a User,
-        // store our DB unless we just did so less than a minute ago
-
-        if (!Throttle::isWithinTimespanMs(lastNodeDbSave, ONE_MINUTE_MS)) {
-            saveToDisk(SEGMENT_NODEDATABASE);
-            lastNodeDbSave = millis();
-        } else {
-            LOG_DEBUG("Defer NodeDB saveToDisk");
-        }
     }
 
 #if HAS_TRAFFIC_MANAGEMENT

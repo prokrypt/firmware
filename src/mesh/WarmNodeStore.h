@@ -28,9 +28,8 @@
  * Flat fixed array, linear scan (only on hot-store misses), LRU by last_heard
  * with keyed entries outranking keyless.
  *
- * Persistence: nRF52840 uses a 12 KB raw-flash record-ring below LittleFS
- * (append + replay + compact-on-rotate - see the backend in WarmNodeStore.cpp,
- * link-guarded by nrf52840_s140_v7.ld). Everywhere else: /prefs/warm.dat.
+ * RAM only: non-favorite keys never reach flash. eraseFlash() removes what older firmware persisted
+ * (nRF52840 raw-flash ring below LittleFS, else /prefs/warm.dat).
  */
 struct WarmNodeEntry {
     NodeNum num;            // 0 = empty slot
@@ -58,9 +57,6 @@ static constexpr uint32_t WARM_PROT_SHIFT = 4;                         // bits [
 static constexpr uint32_t WARM_PROT_MASK = 0x03u;
 static constexpr uint32_t WARM_XEDDSA_SIGNED_SHIFT = 6; // bit [6] we verified an XEdDSA signature from this node
 static constexpr uint32_t WARM_XEDDSA_SIGNED_MASK = 0x01u;
-
-// On-disk record format, from the page/file magic; older ones are normalised by load().
-enum class WarmFormat : uint8_t { Current, V2, V1 };
 
 // Protected category cached alongside role so consumers needn't re-derive the mapping.
 enum class WarmProtected : uint8_t { None = 0, Role = 1, Flag = 2, XeddsaSigner = 3 };
@@ -150,52 +146,15 @@ class WarmNodeStore
     void dumpToLog(const char *reason = "dump") const;
 #endif
 
-    /// Load persisted entries (called once at boot, after the node DB loads).
-    void load();
-    /// Durability point, piggybacked on the node-database save cadence. On the
-    /// ring backend this flushes the shared flash page cache; on the file
-    /// backend it writes the warm.dat snapshot.
-    bool saveIfDirty();
+    /// Erase warm-tier data left on flash by older firmware. User actions only (reset / factory reset).
+    void eraseFlash();
 
   private:
     WarmNodeEntry *entries = nullptr; // WARM_NODE_COUNT slots; PSRAM on ESP32 when available
-    bool dirty = false;
 
     WarmNodeEntry *find(NodeNum num) const;
-    // Internal slot-placement shared by absorb() and ring replay: applies the
-    // keyed-first admission policy without touching persistence.
+    // Slot placement for absorb(): keyed-first admission policy.
     WarmNodeEntry *place(NodeNum num, uint32_t lastHeard, const uint8_t *key32);
-
-    // Persistence hooks called from the mutation paths. File backend: mark
-    // dirty. Ring backend: append an upsert/tombstone record (+ mark dirty).
-    void persistEntry(const WarmNodeEntry &e); // e must point into entries[]
-    void persistRemove(NodeNum num, int storeSlot);
-    void persistClear();
-
-#if defined(NRF52840_XXAA)
-    // nRF52840 raw-flash record-ring state.
-    struct WarmPageHeader {
-        uint32_t magic; // WARM_RING_MAGIC
-        uint32_t seq;   // page generation; 0xFFFFFFFF = erased/unused
-    };
-    static_assert(sizeof(WarmPageHeader) == 8, "page header is part of the flash format");
-    static constexpr uint16_t kRecordsPerPage = (WARM_FLASH_PAGE_SIZE - sizeof(WarmPageHeader)) / sizeof(WarmNodeEntry); // 102
-    static_assert(WARM_NODE_COUNT <= 2 * ((WARM_FLASH_PAGE_SIZE - 8) / 40), "live set must fit the ring with one page reclaimed");
-
-    static constexpr uint8_t kNoPage = 0xFF; // "no page" sentinel for activePage / pageOf[]
-
-    uint8_t activePage = kNoPage;    // no page opened yet (fresh/erased ring)
-    uint16_t writeSlot = 0;          // next free record slot in the active page
-    uint32_t nextSeq = 1;            // seq for the next page opened
-    uint8_t pageOf[WARM_NODE_COUNT]; // flash page holding each RAM slot's newest record; kNoPage = none
-
-    void ringAppend(const WarmNodeEntry &rec, int storeSlot /* -1 for tombstones */);
-    void ringRotate();               // reclaim oldest page, compacting stranded live entries
-    void ringOpenPage(uint8_t page); // erase + write header (seq = nextSeq++)
-    bool ringReadHeader(uint8_t page, WarmPageHeader &h, WarmFormat *fmt = nullptr) const;
-#endif
-
-    bool save();
 };
 
 #endif // WARM_NODE_COUNT > 0

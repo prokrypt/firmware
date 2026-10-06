@@ -459,7 +459,7 @@ static void test_keylessDevice_skipsNodesProtoWrite(void)
     owner.is_licensed = false;
 
     // Returning success on the skip matters: a false here would propagate into
-    // saveToDisk()'s fsFormat() whole-FS wipe.
+    // saveToDisk() as a failed save (upstream: a whole-FS fsFormat() wipe).
     TEST_ASSERT_TRUE_MESSAGE(db->saveDatabase(), "keyless save must report success");
 
     std::vector<uint8_t> after;

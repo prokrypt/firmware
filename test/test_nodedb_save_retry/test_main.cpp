@@ -6,7 +6,8 @@
 // caller's recovery never ran. The regression guarded: saveProto() returning true while the live
 // file was never replaced.
 //
-// saveToDisk() must not answer a failed write with fsFormat(). A write that fails once is far more
+// saveToDisk() must never answer a failed write with fsFormat() - in this fork formatting is a user
+// command only, so the save path has no format branch at all. A write that fails once is far more
 // often a rail dip or a busy SoftDevice than a corrupt filesystem, and the format takes every file on
 // the device with it; on nRF52 that is the "critical error 12/13" report followed by a new node
 // identity. The contract pinned here: a transient failure is retried and the retry lands, and a rail
@@ -15,8 +16,8 @@
 //
 // The rail is driven through powerHAL_isPowerLevelSafe(), whose native default is a weak "always
 // safe"; this suite supplies a strong, scripted definition. Windows links the default strongly, so
-// the gate-driven cases are compiled out there and only the rename case runs. The format branch
-// itself cannot be reached in a native test: on portduino a FLASH_CORRUPTION critical error exits the
+// the gate-driven cases are compiled out there and only the rename case runs. The unreadable-filesystem
+// branch cannot be reached in a native test: on portduino a FLASH_CORRUPTION critical error exits the
 // process, which is exactly the outcome the assertions here prove is not taken.
 #include "MeshTypes.h" // Include BEFORE TestUtil.h
 #include "TestUtil.h"

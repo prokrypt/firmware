@@ -1,6 +1,7 @@
 #ifdef MESHTASTIC_INCLUDE_INKHUD
 
 #include "./InkHUD.h"
+#include "FlashGuard.h"
 
 #include "./Applet.h"
 #include "./Events.h"
@@ -190,6 +191,7 @@ bool InkHUD::InkHUD::isTouchEnabled() const
 // Should be connected to an input source in nicheGraphics.h (NicheGraphics::Inputs::TwoButton?)
 void InkHUD::InkHUD::shortpress()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     events->onButtonShort();
 }
 
@@ -197,24 +199,28 @@ void InkHUD::InkHUD::shortpress()
 // Should be connected to an input source in nicheGraphics.h (NicheGraphics::Inputs::TwoButton?)
 void InkHUD::InkHUD::longpress()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     events->onButtonLong();
 }
 
 // Call this when your exit button gets a short press
 void InkHUD::InkHUD::exitShort()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     events->onExitShort();
 }
 
 // Call this when your exit button gets a long press
 void InkHUD::InkHUD::exitLong()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     events->onExitLong();
 }
 
 // Call this when your joystick gets an up input
 void InkHUD::InkHUD::navUp()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     switch ((persistence->settings.rotation + persistence->settings.joystick.alignment) % 4) {
     case 1: // 90 deg
         events->onNavLeft();
@@ -234,6 +240,7 @@ void InkHUD::InkHUD::navUp()
 // Call this when your joystick gets a down input
 void InkHUD::InkHUD::navDown()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     switch ((persistence->settings.rotation + persistence->settings.joystick.alignment) % 4) {
     case 1: // 90 deg
         events->onNavRight();
@@ -253,6 +260,7 @@ void InkHUD::InkHUD::navDown()
 // Call this when your joystick gets a left input
 void InkHUD::InkHUD::navLeft()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     switch ((persistence->settings.rotation + persistence->settings.joystick.alignment) % 4) {
     case 1: // 90 deg
         events->onNavDown();
@@ -272,6 +280,7 @@ void InkHUD::InkHUD::navLeft()
 // Call this when your joystick gets a right input
 void InkHUD::InkHUD::navRight()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     switch ((persistence->settings.rotation + persistence->settings.joystick.alignment) % 4) {
     case 1: // 90 deg
         events->onNavUp();
@@ -291,6 +300,7 @@ void InkHUD::InkHUD::navRight()
 // Call this when touch input needs joystick-like up navigation independent of joystick-enabled mode
 void InkHUD::InkHUD::touchNavUp()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     switch ((persistence->settings.rotation + persistence->settings.joystick.alignment) % 4) {
     case 1: // 90 deg
         events->onTouchNavLeft();
@@ -310,6 +320,7 @@ void InkHUD::InkHUD::touchNavUp()
 // Call this when touch input needs joystick-like down navigation independent of joystick-enabled mode
 void InkHUD::InkHUD::touchNavDown()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     switch ((persistence->settings.rotation + persistence->settings.joystick.alignment) % 4) {
     case 1: // 90 deg
         events->onTouchNavRight();
@@ -328,11 +339,13 @@ void InkHUD::InkHUD::touchNavDown()
 
 void InkHUD::InkHUD::touchTap(uint16_t x, uint16_t y)
 {
+    FlashGuard::Scope userWrite("inkhud input");
     events->onTouchTap(x, y, false);
 }
 
 void InkHUD::InkHUD::touchLongPress(uint16_t x, uint16_t y)
 {
+    FlashGuard::Scope userWrite("inkhud input");
     events->onTouchTap(x, y, true);
 }
 
@@ -340,18 +353,21 @@ void InkHUD::InkHUD::touchLongPress(uint16_t x, uint16_t y)
 // The Keyboard Applet also calls this
 void InkHUD::InkHUD::freeText(char c)
 {
+    FlashGuard::Scope userWrite("inkhud input");
     events->onFreeText(c);
 }
 
 // Call this to complete a freetext input
 void InkHUD::InkHUD::freeTextDone()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     events->onFreeTextDone();
 }
 
 // Call this to cancel a freetext input
 void InkHUD::InkHUD::freeTextCancel()
 {
+    FlashGuard::Scope userWrite("inkhud input");
     events->onFreeTextCancel();
 }
 

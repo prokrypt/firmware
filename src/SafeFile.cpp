@@ -1,10 +1,13 @@
 #include "SafeFile.h"
+#include "FlashGuard.h"
 
 #ifdef FSCom
 
 // Only way to work on both esp32 and nrf52
 static File openFile(const char *filename, bool fullAtomic)
 {
+    if (!FlashGuard::noteWrite(filename))
+        return File();
     concurrency::LockGuard g(spiLock);
     LOG_DEBUG("Opening %s, fullAtomic=%d", filename, fullAtomic);
     if (!fullAtomic) {

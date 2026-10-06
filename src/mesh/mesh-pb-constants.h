@@ -151,21 +151,20 @@ static inline int get_max_num_nodes()
 
 /// Warm tier: 40 B {num, last_heard, public_key} records kept for evicted nodes
 /// so DMs to/from them keep decrypting. 0 disables it; size is per-platform
-/// below, persisted to /prefs/warm.dat (or the nRF52840 raw-flash ring).
+/// below. RAM only - never persisted.
 #ifndef WARM_NODE_COUNT
 #if MESHTASTIC_MEM_CLASS <= MEM_CLASS_TINY
 #define WARM_NODE_COUNT 0
 #elif defined(NRF52840_XXAA)
 // Keyed on the NRF52840_XXAA build flag, not ARCH_NRF52: the latter (from
 // architecture.h via configuration.h) isn't defined this early in every include
-// chain. Backed by the raw-flash ring below LittleFS - see WarmNodeStore.h.
+// chain.
 // 100 (was 200): the RAM cache is 40 B/entry calloc'd from the ~115 KB heap
 // arena, which 2.8.0 field reports showed at 99% use; 120 hot + 100 warm
 // identities still covers meshes well past the hot cap.
 #define WARM_NODE_COUNT 100
 #elif defined(ARCH_RP2040)
-// Class-deviant on purpose: bounded so the warm.dat write fits the 8s watchdog (#10746),
-// not by RAM (RP2040 264 KB / RP2350 520 KB could hold more).
+// Class-deviant: originally bounded so the warm.dat write fit the 8s watchdog (#10746).
 #define WARM_NODE_COUNT 150
 #elif MESHTASTIC_MEM_CLASS >= MEM_CLASS_LARGE
 #define WARM_NODE_COUNT 2000 // PSRAM-equipped ESP32-S3 / native host; warm cache in PSRAM (~80 KB)

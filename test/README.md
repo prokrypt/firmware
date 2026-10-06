@@ -338,7 +338,6 @@ Each suite runs inside its own scratch `$HOME` (`bin/pio-test-isolate.sh`), so s
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `nodes.proto`                                                    | any `NodeDB` save - including incidental ones from `removeNodeByNum()`, `resetNodes()`, `nodeDBSelfCare()`, and the constructor itself when the file is absent |
 | `config.proto`, `module.proto`, `channels.proto`, `device.proto` | config/channel saves, admin handlers                                                                                                                           |
-| `warm.dat`                                                       | `WarmNodeStore::saveIfDirty()`, on the node-DB save cadence                                                                                                    |
 | `transmit_history.dat`                                           | retransmission tracking                                                                                                                                        |
 | `/prefs/<module>.bin`                                            | per-module `saveState()`                                                                                                                                       |
 

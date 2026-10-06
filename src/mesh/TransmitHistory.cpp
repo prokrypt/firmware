@@ -1,5 +1,6 @@
 #include "TransmitHistory.h"
 #include "FSCommon.h"
+#include "FlashGuard.h"
 #include "SPILock.h"
 #include "UptimeClock.h"
 #include "gps/RTC.h"
@@ -212,6 +213,8 @@ bool TransmitHistory::saveToDisk()
     if (!dirty) {
         return true;
     }
+    if (!FlashGuard::noteWrite(FILENAME))
+        return false;
 
     spiLock->lock();
 

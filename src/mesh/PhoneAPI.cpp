@@ -1,3 +1,4 @@
+#include "FlashGuard.h"
 #include "configuration.h"
 #if !MESHTASTIC_EXCLUDE_GPS
 #include "GPS.h"
@@ -482,7 +483,10 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
 #endif
             LOG_INFO("Got xmodem packet");
 #ifdef FSCom
-            xModem.handlePacket(toRadioScratch.xmodemPacket);
+            {
+                FlashGuard::Scope userWrite("xmodem");
+                xModem.handlePacket(toRadioScratch.xmodemPacket);
+            }
 #endif
             break;
 #if !MESHTASTIC_EXCLUDE_MQTT

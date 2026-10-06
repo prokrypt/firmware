@@ -21,6 +21,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 */
 #include "Screen.h"
+#include "FlashGuard.h"
 #include "NodeDB.h"
 #include "PowerMon.h"
 #include "Throttle.h"
@@ -1911,6 +1912,8 @@ void Screen::loadFrameVisibility()
 void Screen::saveFrameVisibility()
 {
 #ifdef FSCom
+    if (!FlashGuard::noteWrite(frameVisibilityFileName))
+        return;
     spiLock->lock();
     FSCom.mkdir("/prefs");
     if (FSCom.exists(frameVisibilityFileName))

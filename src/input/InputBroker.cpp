@@ -1,4 +1,5 @@
 #include "InputBroker.h"
+#include "FlashGuard.h"
 #include "PowerFSM.h" // needed for event trigger
 #include "configuration.h"
 #include "graphics/Screen.h"
@@ -150,6 +151,7 @@ int InputBroker::handleInputEvent(const InputEvent *event)
     }
 #endif
 
+    FlashGuard::Scope userWrite("input");
     this->notifyObservers(event);
     return 0;
 }

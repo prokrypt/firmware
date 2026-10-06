@@ -1,3 +1,4 @@
+#include "FlashGuard.h"
 #include "PowerFSM.h"
 #include "PowerMon.h"
 #include "configuration.h"
@@ -250,7 +251,8 @@ void esp32Setup()
 
     uint32_t rebootCounter = preferences.getUInt("rebootCounter", 0);
     rebootCounter++;
-    preferences.putUInt("rebootCounter", rebootCounter);
+    if (FlashGuard::noteWrite("nvs rebootCounter"))
+        preferences.putUInt("rebootCounter", rebootCounter);
     // store firmware version and hwrevision for access from OTA firmware
     String fwrev = preferences.getString("firmwareVersion", "");
     if (fwrev.compareTo(optstr(APP_VERSION)) != 0)
