@@ -696,11 +696,12 @@ class NodeDB
     mutable concurrency::Lock satelliteMutex;
     bool duplicateWarned = false;
     bool localPositionUpdatedSinceBoot = false;
-    bool migrationSavePending = false;
     /// Set when loadFromDisk() hit a present-but-undecodable config (DECODE_FAILED). The ctor uses it to
     /// skip boot keygen and skip persisting defaults, so a transient read failure can't change our NodeNum
     /// or overwrite the on-disk config. Cleared at the top of every loadFromDisk() run.
     bool configDecodeFailed = false;
+    bool configFileMissingAtBoot = false; // no usable config on flash: first boot or after factory reset
+    bool identityRestorePending = false;  // legacy-prefs migration restored our keypair; persist it once
     // Defer automatic writes until config load is healthy to protect device and node data from damaged configs.
     bool bootInitializationInProgress = true;
     bool configLoadComplete = false;

@@ -309,9 +309,15 @@ static void test_oldDevicestate_recoversOwnerFromNodeDb(void)
     // and keygen re-derives the same crc32(public_key) value.
     assertIdentityMatchesBaseline();
 
-    // The recovery is re-persisted: the on-disk devicestate is current-version with the
-    // recovered names, not the stale ones.
+    // No automated flash writes: the recovery lives in RAM and the stale file stays as it was
+    // until a user-initiated save, which then lands the current version with the recovered names.
     static meshtastic_DeviceState saved;
+    TEST_ASSERT_EQUAL(LoadFileResult::LOAD_SUCCESS, nodeDB->loadProto(deviceStateFileName, meshtastic_DeviceState_size,
+                                                                      sizeof(saved), &meshtastic_DeviceState_msg, &saved));
+    TEST_ASSERT_EQUAL(DEVICESTATE_MIN_VER - 1, saved.version);
+    TEST_ASSERT_EQUAL_STRING("Stale Devicestate", saved.owner.long_name);
+
+    TEST_ASSERT_TRUE(nodeDB->saveToDisk(SEGMENT_DEVICESTATE));
     TEST_ASSERT_EQUAL(LoadFileResult::LOAD_SUCCESS, nodeDB->loadProto(deviceStateFileName, meshtastic_DeviceState_size,
                                                                       sizeof(saved), &meshtastic_DeviceState_msg, &saved));
     TEST_ASSERT_EQUAL(DEVICESTATE_CUR_VER, saved.version);

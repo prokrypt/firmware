@@ -1,6 +1,7 @@
 // Round-trip fidelity of the v25 slim NodeDB persistence cycle: snr_q4 quantization and its
 // HAS_SNR sentinel, satellite-map projection/rehydration and eviction, the keyless-device write
-// skip, and resetNodes() compaction. Each test saves, cold-boots a real NodeDB, and reads back.
+// skip, resetNodes() compaction, and favorites-only storage (only self and favorites keep keys on
+// flash; boot heals in RAM and never rewrites). Each test saves, cold-boots a real NodeDB, and reads back.
 #include "MeshTypes.h" // BEFORE TestUtil.h - provides MAX_SATELLITE_NODES via mesh-pb-constants.h
 #include "TestUtil.h"
 #include <unity.h>
@@ -265,6 +266,8 @@ static void test_snrQuantization_roundTripsThroughDisk(void)
     addUserNode(N5, 0x05);
     addUserNode(N6, 0x06);
     heardOverLoRa(N6, 7.9f);
+    for (uint32_t n : {N1, N2, N3, N4, N5, N6})
+        TEST_ASSERT_TRUE(nodeDB->set_favorite(true, n)); // only favorites reach flash
 
     TEST_ASSERT_TRUE(db->saveDatabase());
     coldBoot();
@@ -363,7 +366,9 @@ static void test_fullRoundTrip_headerAndSatelliteFidelity(void)
     mp.rx_snr = 2.0f;
     nodeDB->updateFrom(mp);
     m = db->getMeshNode(M);
-    nodeInfoLiteSetBit(m, NODEINFO_BITFIELD_IS_MUTED_MASK, true);
+    nodeInfoLiteSetBit(m, NODEINFO_BITFIELD_IS_MUTED_MASK, true); // M: muted, not a favorite
+    for (uint32_t n : {P, T, E})
+        TEST_ASSERT_TRUE(nodeDB->set_favorite(true, n));
 
     TEST_ASSERT_TRUE(db->saveDatabase());
     assertTempVectorsEmpty("temp vectors must be cleared after the save projection");
@@ -390,6 +395,7 @@ static void test_fullRoundTrip_headerAndSatelliteFidelity(void)
     TEST_ASSERT_NOT_NULL(nm);
     TEST_ASSERT_TRUE(nodeInfoLiteViaMqtt(nm));
     TEST_ASSERT_TRUE(nodeInfoLiteIsMuted(nm));
+    TEST_ASSERT_EQUAL_MESSAGE(0, nm->public_key.size, "a muted non-favorite keeps its entry but never its key");
     TEST_ASSERT_TRUE(nm->has_hops_away);
     TEST_ASSERT_EQUAL_UINT8(3, nm->hops_away);
     TEST_ASSERT_TRUE(nodeInfoLiteHasSnr(nm));
@@ -471,6 +477,7 @@ static void test_keylessDevice_skipsNodesProtoWrite(void)
 
     // Control: with the key restored, the same call writes.
     addUserNode(0x55000001, 0x55);
+    TEST_ASSERT_TRUE(nodeDB->set_favorite(true, 0x55000001)); // a plain node would be filtered out
     TEST_ASSERT_TRUE(db->saveDatabase());
     TEST_ASSERT_TRUE(readFileBytes(nodeDatabaseFileName, after));
     TEST_ASSERT_FALSE_MESSAGE(before == after, "keyed save must rewrite nodes.proto");
@@ -537,7 +544,7 @@ static void test_satelliteCap_evictionPolicy(void)
 // --- Boot-time trim of an over-cap nodes.proto (capacity downgrade / foreign file) ---
 
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
-static void test_bootTrim_overCapSatellitesHealedOnDisk(void)
+static void test_bootTrim_overCapSatellitesHealedInRamOnly(void)
 {
     const size_t overBy = 10;
     const NodeNum base = 0x70000000u;
@@ -555,6 +562,8 @@ static void test_bootTrim_overCapSatellitesHealedOnDisk(void)
     size_t craftedSize = 0;
     TEST_ASSERT_TRUE(pb_get_encoded_size(&craftedSize, meshtastic_NodeDatabase_fields, &crafted));
     TEST_ASSERT_TRUE(db->saveProto(nodeDatabaseFileName, craftedSize, &meshtastic_NodeDatabase_msg, &crafted, false));
+    std::vector<uint8_t> before;
+    TEST_ASSERT_TRUE(readFileBytes(nodeDatabaseFileName, before));
 
     coldBoot();
 
@@ -563,15 +572,10 @@ static void test_bootTrim_overCapSatellitesHealedOnDisk(void)
     TEST_ASSERT_TRUE(db->hasNodePosition(base + (uint32_t)MAX_SATELLITE_NODES + (uint32_t)overBy - 1));
     TEST_ASSERT_FALSE(db->hasNodePosition(base));
 
-    // And healed on disk: nodeDBSelfCare rewrote the store once during the boot.
-    meshtastic_NodeDatabase reloaded{};
-    decodeNodesFile(reloaded);
-    size_t persisted = 0;
-    for (const auto &e : reloaded.positions)
-        if (e.has_position)
-            persisted++;
-    TEST_ASSERT_EQUAL_UINT_MESSAGE((unsigned)MAX_SATELLITE_NODES, (unsigned)persisted,
-                                   "boot must rewrite the over-cap store trimmed");
+    // No automated flash writes: the heal stays in RAM and nodes.proto is left byte-identical.
+    std::vector<uint8_t> after;
+    TEST_ASSERT_TRUE(readFileBytes(nodeDatabaseFileName, after));
+    TEST_ASSERT_TRUE_MESSAGE(before == after, "boot must not rewrite nodes.proto");
 }
 #endif // !MESHTASTIC_EXCLUDE_POSITIONDB
 
@@ -579,7 +583,7 @@ static void test_bootTrim_overCapSatellitesHealedOnDisk(void)
 
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
 // Guards #11798: satellite entries whose key names no hot node are dropped on boot and the
-// healed store is rewritten once; keys that cannot name a node (0, NODENUM_BROADCAST) are
+// heal stays in RAM (nodes.proto is not rewritten); keys that cannot name a node (0, NODENUM_BROADCAST) are
 // refused at decode.
 static void test_bootHeal_unownedSatellitesDropped(void)
 {
@@ -604,6 +608,8 @@ static void test_bootHeal_unownedSatellitesDropped(void)
     size_t craftedSize = 0;
     TEST_ASSERT_TRUE(pb_get_encoded_size(&craftedSize, meshtastic_NodeDatabase_fields, &crafted));
     TEST_ASSERT_TRUE(db->saveProto(nodeDatabaseFileName, craftedSize, &meshtastic_NodeDatabase_msg, &crafted, false));
+    std::vector<uint8_t> before;
+    TEST_ASSERT_TRUE(readFileBytes(nodeDatabaseFileName, before));
 
     coldBoot();
 
@@ -614,17 +620,10 @@ static void test_bootHeal_unownedSatellitesDropped(void)
         TEST_ASSERT_FALSE_MESSAGE(db->hasNodePosition(orphanBase + (uint32_t)i), "orphan must be swept on boot");
     TEST_ASSERT_FALSE_MESSAGE(db->hasNodePosition(0), "key 0 must be refused at decode");
     TEST_ASSERT_FALSE_MESSAGE(db->hasNodePosition(NODENUM_BROADCAST), "broadcast key must be refused at decode");
-    // And healed on disk: nodeDBSelfCare rewrote the store once during the boot.
-    meshtastic_NodeDatabase reloaded{};
-    decodeNodesFile(reloaded);
-    size_t persisted = 0;
-    for (const auto &e : reloaded.positions) {
-        if (!e.has_position)
-            continue;
-        TEST_ASSERT_TRUE_MESSAGE(e.num >= ownedBase && e.num < ownedBase + owned, "healed store must contain only owned entries");
-        persisted++;
-    }
-    TEST_ASSERT_EQUAL_UINT_MESSAGE((unsigned)owned, (unsigned)persisted, "boot must rewrite the store without the orphans");
+    // No automated flash writes: the heal stays in RAM and nodes.proto is left byte-identical.
+    std::vector<uint8_t> after;
+    TEST_ASSERT_TRUE(readFileBytes(nodeDatabaseFileName, after));
+    TEST_ASSERT_TRUE_MESSAGE(before == after, "boot must not rewrite nodes.proto");
 }
 #endif // !MESHTASTIC_EXCLUDE_POSITIONDB
 
@@ -691,6 +690,72 @@ static void test_resetNodesKeepFavorites_compactsWithoutGhostRows(void)
     TEST_ASSERT_TRUE(sawF4);
 }
 
+// --- Favorites-only key storage ---
+
+// The fork's storage rule: flash holds self and favorites with their keys and satellites; a plain
+// node is not written at all; an ignored node keeps its entry (so the block survives reboot) but
+// loses its key and the verified/XEdDSA bits. Guards against any save path leaking a non-favorite key.
+static void test_favoritesOnly_dropsPlainNodesAndStripsFlaggedKeys(void)
+{
+    const uint32_t FAV = 0x78000001, PLAIN = 0x78000002, IGN = 0x78000003;
+    addUserNode(FAV, 0x31);
+    addUserNode(PLAIN, 0x32);
+    meshtastic_NodeInfoLite *ign = addUserNode(IGN, 0x33);
+    ign->bitfield |= NODEINFO_BITFIELD_IS_IGNORED_MASK | NODEINFO_BITFIELD_IS_KEY_MANUALLY_VERIFIED_MASK |
+                     NODEINFO_BITFIELD_HAS_XEDDSA_SIGNED_MASK;
+#if !MESHTASTIC_EXCLUDE_POSITIONDB
+    meshtastic_Position pos = meshtastic_Position_init_zero;
+    pos.latitude_i = 333;
+    pos.longitude_i = 444;
+    nodeDB->updatePosition(FAV, pos);
+    nodeDB->updatePosition(PLAIN, pos);
+    nodeDB->updatePosition(IGN, pos);
+#endif
+    TEST_ASSERT_TRUE(nodeDB->set_favorite(true, FAV));
+    TEST_ASSERT_TRUE(db->saveDatabase());
+
+    meshtastic_NodeDatabase reloaded{};
+    decodeNodesFile(reloaded);
+    const meshtastic_NodeInfoLite *fav = nullptr, *ignored = nullptr;
+    bool sawSelf = false;
+    for (const auto &n : reloaded.nodes) {
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(PLAIN, n.num, "a plain node must never reach flash");
+        if (n.num == FAV)
+            fav = &n;
+        if (n.num == IGN)
+            ignored = &n;
+        if (n.num == nodeDB->getNodeNum()) {
+            sawSelf = true;
+            TEST_ASSERT_EQUAL_MESSAGE(32, n.public_key.size, "our own key must persist");
+        }
+    }
+    TEST_ASSERT_TRUE(sawSelf);
+    TEST_ASSERT_NOT_NULL(fav);
+    TEST_ASSERT_EQUAL(32, fav->public_key.size);
+    meshtastic_User expected = makeUser(FAV, 0x31);
+    TEST_ASSERT_EQUAL_MEMORY(expected.public_key.bytes, fav->public_key.bytes, 32);
+    TEST_ASSERT_NOT_NULL_MESSAGE(ignored, "an ignored node keeps its entry so the block survives reboot");
+    TEST_ASSERT_TRUE(ignored->bitfield & NODEINFO_BITFIELD_IS_IGNORED_MASK);
+    TEST_ASSERT_EQUAL_MESSAGE(0, ignored->public_key.size, "an ignored non-favorite must not keep its key");
+    for (int i = 0; i < 32; i++)
+        TEST_ASSERT_EQUAL_UINT8(0, ignored->public_key.bytes[i]);
+    TEST_ASSERT_FALSE(ignored->bitfield & NODEINFO_BITFIELD_IS_KEY_MANUALLY_VERIFIED_MASK);
+    TEST_ASSERT_FALSE(ignored->bitfield & NODEINFO_BITFIELD_HAS_XEDDSA_SIGNED_MASK);
+#if !MESHTASTIC_EXCLUDE_POSITIONDB
+    bool favPos = false;
+    for (const auto &e : reloaded.positions) {
+        TEST_ASSERT_TRUE_MESSAGE(e.num != PLAIN && e.num != IGN, "only self/favorite satellites persist");
+        if (e.num == FAV)
+            favPos = true;
+    }
+    TEST_ASSERT_TRUE(favPos);
+#endif
+
+    // RAM is untouched by the filter: the live store still has the plain node and every key.
+    TEST_ASSERT_NOT_NULL(db->getMeshNode(PLAIN));
+    TEST_ASSERT_EQUAL(32, db->getMeshNode(IGN)->public_key.size);
+}
+
 NDBR_TEST_ENTRY void setup()
 {
     initializeTestEnvironment();
@@ -736,12 +801,15 @@ NDBR_TEST_ENTRY void setup()
     RUN_TEST(test_satelliteCap_evictionPolicy);
 #endif
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
-    RUN_TEST(test_bootTrim_overCapSatellitesHealedOnDisk);
+    RUN_TEST(test_bootTrim_overCapSatellitesHealedInRamOnly);
     RUN_TEST(test_bootHeal_unownedSatellitesDropped);
 #endif
 
     printf("\n=== resetNodes ghost rows ===\n");
     RUN_TEST(test_resetNodesKeepFavorites_compactsWithoutGhostRows);
+
+    printf("\n=== Favorites-only storage ===\n");
+    RUN_TEST(test_favoritesOnly_dropsPlainNodesAndStripsFlaggedKeys);
 
     exit(UNITY_END());
 }

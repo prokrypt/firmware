@@ -1,6 +1,7 @@
 #include "RadioInterface.h"
 #include "Channels.h"
 #include "DisplayFormatters.h"
+#include "FlashGuard.h"
 #include "LLCC68Interface.h"
 #include "LR1110Interface.h"
 #include "LR1120Interface.h"
@@ -645,7 +646,11 @@ std::unique_ptr<RadioInterface> initLoRa()
     if ((config.lora.region == meshtastic_Config_LoRaConfig_RegionCode_LORA_24) && rIf && (!rIf->wideLora())) {
         LOG_WARN("LoRa chip does not support 2.4GHz. Revert to unset");
         config.lora.region = meshtastic_Config_LoRaConfig_RegionCode_UNSET;
-        nodeDB->saveToDisk(SEGMENT_CONFIG);
+        {
+            // One-time correction of a region this chip can't run; without it a failed reconfigure reboot-loops.
+            FlashGuard::Scope oneTime("region/hardware mismatch");
+            nodeDB->saveToDisk(SEGMENT_CONFIG);
+        }
 
         if (rIf && !rIf->reconfigure()) {
             LOG_WARN("Reconfigure failed, rebooting");

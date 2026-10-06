@@ -1,5 +1,6 @@
 // devicestate.my_node survives a firmware reinstall, so a vanilla build (no
-// USERPREFS_FIRMWARE_EDITION) must reset a persisted event edition at boot.
+// USERPREFS_FIRMWARE_EDITION) must reset a persisted event edition at boot - in RAM, since boot
+// never writes flash; the file follows at the next user-initiated save.
 #include "MeshTypes.h" // Include BEFORE TestUtil.h
 #include "TestUtil.h"
 #include "mesh/NodeDB.h"
@@ -33,7 +34,9 @@ static void test_vanillaBoot_resetsPersistedEventEdition(void)
     nodeDB = rebooted;
 
     TEST_ASSERT_EQUAL(meshtastic_FirmwareEdition_VANILLA, devicestate.my_node.firmware_edition);
-    // On disk too, not just in RAM: the stamp must land before the boot save decision.
+    TEST_ASSERT_EQUAL_MESSAGE(meshtastic_FirmwareEdition_DEFCON, persistedEdition(), "boot must not write devicestate");
+
+    TEST_ASSERT_TRUE(nodeDB->saveToDisk(SEGMENT_DEVICESTATE));
     TEST_ASSERT_EQUAL(meshtastic_FirmwareEdition_VANILLA, persistedEdition());
 }
 

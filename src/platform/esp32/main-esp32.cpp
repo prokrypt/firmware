@@ -249,16 +249,15 @@ void esp32Setup()
     Preferences preferences;
     preferences.begin("meshtastic", false);
 
+    // The reboot counter is no longer incremented. Version and vendor (read by the OTA loader) change only
+    // after the user flashes new firmware, so they are written once per flash.
     uint32_t rebootCounter = preferences.getUInt("rebootCounter", 0);
-    rebootCounter++;
-    if (FlashGuard::noteWrite("nvs rebootCounter"))
-        preferences.putUInt("rebootCounter", rebootCounter);
-    // store firmware version and hwrevision for access from OTA firmware
+    FlashGuard::Scope afterFlash("firmware version record");
     String fwrev = preferences.getString("firmwareVersion", "");
-    if (fwrev.compareTo(optstr(APP_VERSION)) != 0)
+    if (fwrev.compareTo(optstr(APP_VERSION)) != 0 && FlashGuard::noteWrite("nvs firmwareVersion"))
         preferences.putString("firmwareVersion", optstr(APP_VERSION));
     uint8_t hwven = preferences.getUInt("hwVendor", 0);
-    if (hwven != HW_VENDOR)
+    if (hwven != HW_VENDOR && FlashGuard::noteWrite("nvs hwVendor"))
         preferences.putUInt("hwVendor", HW_VENDOR);
     preferences.end();
     LOG_DEBUG("Number of Device Reboots: %d", rebootCounter);

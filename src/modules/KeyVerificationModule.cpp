@@ -438,8 +438,9 @@ void KeyVerificationModule::commitVerifiedRemoteNode()
         nodeInfoModule->sendOurNodeInfo(currentRemoteNode, false, node->channel, true);
     crypto->clearPendingPublicKey();
     currentState = KEY_VERIFICATION_IDLE;
-    // Persist the committed key and verified flag so manual verification survives a reboot.
-    nodeDB->saveToDisk(SEGMENT_NODEDATABASE);
+    // Only favorites have keys on flash; verifying anyone else stays in RAM until they are favorited.
+    if (nodeInfoLiteIsFavorite(node))
+        nodeDB->saveToDisk(SEGMENT_NODEDATABASE);
 }
 
 void KeyVerificationModule::generateVerificationCode(char *readableCode)

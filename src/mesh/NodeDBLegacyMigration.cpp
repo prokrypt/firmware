@@ -3,7 +3,7 @@
 // fixed-shape decode + field-by-field copy doesn't clutter NodeDB.cpp.
 //
 // Caller (NodeDB::loadFromDisk) decides what to do with the result:
-//   - true  -> persist via saveNodeDatabaseToDisk()
+//   - true  -> keep the migrated store in RAM (persisted at the next user save)
 //   - false -> reset via installDefaultNodeDatabase()
 //
 // This file (and the deviceonly_legacy proto) can be removed once

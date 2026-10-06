@@ -139,8 +139,8 @@ void coldBoot()
     nodeDB = db;
 }
 
-/// The migrated-store re-save (migrationSavePending) is skipped for keyless
-/// devices, so every persistence assertion depends on boot keygen having run.
+/// saveNodeDatabaseToDisk() skips keyless devices, so every persistence
+/// assertion depends on boot keygen having run.
 void assertBootKeygenRan()
 {
     TEST_ASSERT_EQUAL_MESSAGE(32, owner.public_key.size,
@@ -494,9 +494,10 @@ static void test_overCapLegacyFile_truncatesToMaxNumNodes(void)
 
 // --- Full boot ladder persistence ---
 
-// The deferred migrationSavePending re-save must land: after the boot,
-// the on-disk nodes.proto is v25 with the migrated node, key, and satellite.
-static void test_fullBootLadder_persistsMigratedV25(void)
+// No automated flash writes: boot migrates v24 in RAM and leaves nodes.proto byte-identical. The v25
+// store lands only at the next user-initiated save - here favoriting the node, since only favorites
+// keep their key on flash - and must then carry the migrated node, key, and satellite.
+static void test_fullBootLadder_migratesInRamPersistsOnUserSave(void)
 {
     auto a = makeLegacyNode(0xD4000001, 4000);
     giveLegacyUser(a, "Persist Me", "PM");
@@ -504,10 +505,23 @@ static void test_fullBootLadder_persistsMigratedV25(void)
     a.has_position = true;
     a.position.latitude_i = 101010101;
     a.position.longitude_i = -202020202;
-    writeLegacyNodesFile(24, {a});
+    const std::vector<uint8_t> legacyBytes = encodeLegacyNodes(24, {a});
+    writeNodesBytes(legacyBytes.data(), legacyBytes.size());
     coldBoot();
 
     assertBootKeygenRan();
+    TEST_ASSERT_NOT_NULL_MESSAGE(db->getMeshNode(0xD4000001), "boot must migrate the node in RAM");
+    {
+        std::vector<uint8_t> onDisk;
+        auto f = FSCom.open(nodeDatabaseFileName, FILE_O_READ);
+        TEST_ASSERT_TRUE((bool)f);
+        onDisk.resize(f.size());
+        f.read(onDisk.data(), onDisk.size());
+        f.close();
+        TEST_ASSERT_TRUE_MESSAGE(onDisk == legacyBytes, "boot must not rewrite nodes.proto");
+    }
+
+    TEST_ASSERT_TRUE(db->set_favorite(true, 0xD4000001));
 
     meshtastic_NodeDatabase reloaded{};
     TEST_ASSERT_EQUAL(LoadFileResult::LOAD_SUCCESS,
@@ -520,7 +534,7 @@ static void test_fullBootLadder_persistsMigratedV25(void)
         if (n.num == 0xD4000001)
             persisted = &n;
     }
-    TEST_ASSERT_NOT_NULL_MESSAGE(persisted, "migrated node must survive the v25 re-save");
+    TEST_ASSERT_NOT_NULL_MESSAGE(persisted, "migrated favorite must be in the v25 save");
     TEST_ASSERT_EQUAL_STRING("Persist Me", persisted->long_name);
     TEST_ASSERT_TRUE(persisted->bitfield & NODEINFO_BITFIELD_HAS_USER_MASK);
     TEST_ASSERT_EQUAL(32, persisted->public_key.size);
@@ -539,15 +553,15 @@ static void test_fullBootLadder_persistsMigratedV25(void)
             TEST_ASSERT_EQUAL_INT32(-202020202, e.position.longitude_i);
         }
     }
-    TEST_ASSERT_TRUE_MESSAGE(posFound, "satellite position must survive the v25 re-save");
+    TEST_ASSERT_TRUE_MESSAGE(posFound, "favorite's satellite position must be in the v25 save");
 #endif
 }
 
 NDBM_TEST_ENTRY void setup()
 {
     initializeTestEnvironment();
-    // First boot on the empty sandbox: installs defaults, runs keygen, and
-    // persists the base config files every later cold boot reloads.
+    // First boot on the empty sandbox: installs defaults and runs keygen; the minted
+    // identity is the one boot write, so config.proto persists for later cold boots.
     coldBoot();
 
     UNITY_BEGIN();
@@ -568,7 +582,7 @@ NDBM_TEST_ENTRY void setup()
 
     printf("\n=== Capacity and persistence ===\n");
     RUN_TEST(test_overCapLegacyFile_truncatesToMaxNumNodes);
-    RUN_TEST(test_fullBootLadder_persistsMigratedV25);
+    RUN_TEST(test_fullBootLadder_migratesInRamPersistsOnUserSave);
 
     exit(UNITY_END());
 }

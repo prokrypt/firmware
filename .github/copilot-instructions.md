@@ -228,9 +228,15 @@ Where it is enabled, a node evicted from the header table is not forgotten outri
 
 Only the freshest `MAX_SATELLITE_NODES` nodes keep satellite payloads; the rest of the header table carries just the `NodeInfoLite`. The cap is **per-platform**: 40 on RAM-constrained parts (nRF52840, generic ESP32) since the four maps live in internal SRAM (not PSRAM, ~408 B/node across the four), and 250 on flash-rich hosts (ESP32-S3, portduino) so every hot node can carry rich data as before the cap existed. `enforceSatelliteCaps()` trims each map to the cap on load (returns whether it trimmed); `evictSatelliteOverCap()` trims before each insert. Eviction is by the owning node's hot `last_heard` (stalest first, demoted/absent nodes rank as `last_heard==0`); self is never trimmed.
 
+### Flash write policy (this fork)
+
+- No automated flash writes. Every write goes through `FlashGuard` (`src/FlashGuard.h`) and must happen inside a `FlashGuard::Scope` opened by a user action (admin message, input event, InkHUD input, xmodem, web upload). Unscoped writes are logged; `FLASH_GUARD_ENFORCE` refuses them.
+- Sanctioned one-time writes: a newly minted or restored identity keypair (`SEGMENT_CONFIG` at the end of the `NodeDB` constructor), a region the radio chip cannot run, a lockdown encryption migration, the ESP32 firmware-version record after a flash.
+- `nodes.proto` holds only self and favorites (with keys and satellites). Ignored/muted non-favorites keep an entry without key, verified or XEdDSA bits. Everything else is RAM only.
+
 ### On-boot self-care
 
-`NodeDB::nodeDBSelfCare()` runs once identity is established (the constructor after key (re)gen, and `reloadFromDisk()` - _not_ inside `loadFromDisk`, where `getNodeNum()` is still 0). It confirms self is present (warns if a non-empty DB is missing us - a foreign/over-cap file), pins self to index 0, demotes/trims only **non-self** overflow into the warm tier, then rewrites `nodes.proto` **once** and only if it healed something - and never while encrypted storage is locked (it would persist placeholder defaults). `loadFromDisk` deliberately leaves the loaded store untrimmed for this pass.
+`NodeDB::nodeDBSelfCare()` runs once identity is established (the constructor after key (re)gen, and `reloadFromDisk()` - _not_ inside `loadFromDisk`, where `getNodeNum()` is still 0). It confirms self is present (warns if a non-empty DB is missing us - a foreign/over-cap file), pins self to index 0, demotes/trims only **non-self** overflow into the warm tier. Healing stays in RAM: this fork never writes flash on its own, so the healed store lands at the next user-initiated save. `loadFromDisk` deliberately leaves the loaded store untrimmed for this pass.
 
 ### Sync flow: thin NodeInfo + post-COMPLETE_ID replay (no opt-in)
 
@@ -255,7 +261,7 @@ There are no other reserved nonces; everything else is a fresh random `want_conf
 
 ### v24 → v25 migration
 
-The legacy migration code lives in **`src/mesh/NodeDBLegacyMigration.cpp`**, not in `NodeDB.cpp`. It owns the `meshtastic_NodeDatabase_Legacy` callback and `NodeDB::migrateLegacyNodeDatabase()`. The legacy proto descriptor is `protobufs/meshtastic/deviceonly_legacy.proto` (only included by the migration TU). The boot path peeks the file's leading version tag, runs the migration if `version < 25`, then re-saves in v25 layout. The legacy descriptor is scheduled for removal once `DEVICESTATE_MIN_VER` is bumped.
+The legacy migration code lives in **`src/mesh/NodeDBLegacyMigration.cpp`**, not in `NodeDB.cpp`. It owns the `meshtastic_NodeDatabase_Legacy` callback and `NodeDB::migrateLegacyNodeDatabase()`. The legacy proto descriptor is `protobufs/meshtastic/deviceonly_legacy.proto` (only included by the migration TU). The boot path peeks the file's leading version tag, runs the migration if `version < 25` in RAM on every boot; the v25 layout is written at the next user-initiated save. The legacy descriptor is scheduled for removal once `DEVICESTATE_MIN_VER` is bumped.
 
 ### Read-site rules of thumb
 

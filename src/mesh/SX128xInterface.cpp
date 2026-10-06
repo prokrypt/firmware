@@ -1,5 +1,6 @@
 #if RADIOLIB_EXCLUDE_SX128X != 1
 #include "SX128xInterface.h"
+#include "FlashGuard.h"
 #include "Throttle.h"
 #include "configuration.h"
 #include "error.h"
@@ -96,7 +97,11 @@ template <typename T> bool SX128xInterface<T>::reinitChip(bool fromInit)
         }
         LOG_WARN("Radio only supports 2.4GHz LoRa. Adjusting Region and rebooting");
         config.lora.region = meshtastic_Config_LoRaConfig_RegionCode_LORA_24;
-        nodeDB->saveToDisk(SEGMENT_CONFIG);
+        {
+            // One-time correction of a region this chip can't run; without it the reboot below loops.
+            FlashGuard::Scope oneTime("region/hardware mismatch");
+            nodeDB->saveToDisk(SEGMENT_CONFIG);
+        }
         delay(2000);
 #if defined(ARCH_ESP32)
         ESP.restart();

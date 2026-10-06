@@ -8,6 +8,7 @@
 #include "CryptoEngine.h"
 #include "Default.h"
 #include "FSCommon.h"
+#include "FlashGuard.h"
 #include "MeshRadio.h"
 #include "MeshService.h"
 #include "MessageStore.h"
@@ -479,12 +480,9 @@ NodeDB::NodeDB()
     loadFromDisk();
     cleanupMeshDB();
 
-    uint32_t devicestateCRC = crc32Buffer(&devicestate, sizeof(devicestate));
-    uint32_t nodeDatabaseCRC = crc32Buffer(&nodeDatabase, sizeof(nodeDatabase));
-    uint32_t configCRC = crc32Buffer(&config, sizeof(config));
-    uint32_t channelFileCRC = crc32Buffer(&channelFile, sizeof(channelFile));
-
-    int saveWhat = 0;
+    // Boot fix-ups below apply in RAM only. The single sanctioned boot write is a newly minted
+    // (or restored) identity keypair, which would otherwise change our NodeNum on every boot.
+    const meshtastic_Config_SecurityConfig_private_key_t keyAtLoad = config.security.private_key;
     // Re-read the device id from silicon each boot via the per-arch getDeviceId(); clear the
     // disk-loaded value first so a failed/empty derivation leaves it unset rather than stale.
     myNodeInfo.device_id.size = 0;
@@ -538,24 +536,13 @@ NodeDB::NodeDB()
         myNodeInfo.my_node_num = crc32Buffer(config.security.public_key.bytes, config.security.public_key.size);
     }
 #endif
+    const bool identityMinted = !configDecodeFailed && config.security.private_key.size == 32 &&
+                                (keyAtLoad.size != 32 || memcmp(keyAtLoad.bytes, config.security.private_key.bytes, 32) != 0);
+
     // Identity is now established, so run the self-care pass on the store
     // loadFromDisk() deliberately left untrimmed: confirm self, trim/demote only
-    // non-self overflow, pin self to index 0, rewrite once if healed.
+    // non-self overflow, pin self to index 0. Healing stays in RAM.
     nodeDBSelfCare();
-
-    // If we migrated from legacy during loadFromDisk(), persist the migrated DB
-    // only after identity and self-care are established.
-    if (migrationSavePending) {
-        saveNodeDatabaseToDisk();
-        migrationSavePending = false;
-    }
-
-    // If node database has not been saved for the first time, save it now
-#ifdef FSCom
-    if (!FSCom.exists(nodeDatabaseFileName)) {
-        saveNodeDatabaseToDisk();
-    }
-#endif
 
 #ifdef ARCH_ESP32
     Preferences preferences;
@@ -673,23 +660,12 @@ NodeDB::NodeDB()
     }
 #endif
 
-    if (devicestateCRC != crc32Buffer(&devicestate, sizeof(devicestate)))
-        saveWhat |= SEGMENT_DEVICESTATE;
-    if (nodeDatabaseCRC != crc32Buffer(&nodeDatabase, sizeof(nodeDatabase)))
-        saveWhat |= SEGMENT_NODEDATABASE;
-    // Don't persist on a degraded boot: it would overwrite the unreadable-but-maybe-transient config file
-    // with no-key UNSET defaults. Runtime reconfiguration (admin set) still persists normally.
-    if (!configDecodeFailed && configCRC != crc32Buffer(&config, sizeof(config)))
-        saveWhat |= SEGMENT_CONFIG;
-    if (channelFileCRC != crc32Buffer(&channelFile, sizeof(channelFile)))
-        saveWhat |= SEGMENT_CHANNELS;
-
     if (config.position.gps_enabled) {
         config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;
         config.position.gps_enabled = 0;
     }
 #ifdef USERPREFS_FIXED_GPS
-    if (myNodeInfo.reboot_count == 1) { // Check if First boot ever or after Factory Reset.
+    if (configFileMissingAtBoot) { // First boot ever or after factory reset
         meshtastic_Position fixedGPS = meshtastic_Position_init_default;
 #ifdef USERPREFS_FIXED_GPS_LAT
         fixedGPS.latitude_i = (int32_t)(USERPREFS_FIXED_GPS_LAT * 1e7);
@@ -711,24 +687,21 @@ NodeDB::NodeDB()
             concurrency::LockGuard guard(&satelliteMutex);
             nodePositions[getNodeNum()] = TypeConversions::ConvertToPositionLite(fixedGPS);
         }
-        // nodePositions is a member map, so the nodeDatabase CRC compare above cannot see this write -
-        // and it has already run. Flag the segment or the fixed position is only persisted by chance.
-        saveWhat |= SEGMENT_NODEDATABASE;
 #endif
         setLocalPosition(fixedGPS);
         config.position.fixed_position = true;
-        // Same for config, whose CRC compare also ran before this block. Keep that compare's
-        // degraded-boot guard so an unreadable config is never overwritten with UNSET defaults.
-        if (!configDecodeFailed)
-            saveWhat |= SEGMENT_CONFIG;
 #endif
     }
 #endif
     sortMeshDB();
     // resetRadioConfig() above loaded config and channels, so this records the slot we booted on.
     refreshCommittedLoraSlot();
-    saveToDisk(saveWhat);
     bootInitializationInProgress = false;
+    if (identityMinted || identityRestorePending) {
+        FlashGuard::Scope oneTime("identity keypair");
+        saveToDisk(SEGMENT_CONFIG);
+        identityRestorePending = false;
+    }
 }
 
 /**
@@ -2405,20 +2378,10 @@ void NodeDB::nodeDBSelfCare()
             std::swap(meshNodes->at(0), *info);
     }
 
-    // One-shot rewrite: only when we healed something, and never while storage
-    // is locked - a locked boot loads placeholder defaults that must not be written
-    // over the encrypted store; reloadFromDisk() re-runs self-care once unlocked.
-#ifdef MESHTASTIC_ENCRYPTED_STORAGE
-    const bool storageLocked = EncryptedStorage::isLockdownActive() && !EncryptedStorage::isUnlocked();
-#else
-    const bool storageLocked = false;
-#endif
-
-    if ((nodesOverCap || satsTrimmed) && !storageLocked) {
-        LOG_MIGRATION("NodeDB self-care: healed store (nodes-over-cap:%s sats-trimmed:%s); rewriting nodes.proto once",
-                      nodesOverCap ? "yes" : "no", satsTrimmed ? "yes" : "no");
-        saveNodeDatabaseToDisk();
-    }
+    // Healing stays in RAM; the healed store lands at the next user-initiated save.
+    if (nodesOverCap || satsTrimmed)
+        LOG_MIGRATION("NodeDB self-care: healed store in RAM (nodes-over-cap:%s sats-trimmed:%s)", nodesOverCap ? "yes" : "no",
+                      satsTrimmed ? "yes" : "no");
 }
 
 void NodeDB::loadFromDisk()
@@ -2434,8 +2397,8 @@ void NodeDB::loadFromDisk()
     storageCorruptThisLoad = false;
 #endif
 
-    migrationSavePending = false;
     configDecodeFailed = false;
+    configFileMissingAtBoot = false;
     configLoadComplete = false;
 
 #if !USERPREFS_EVENT_MODE
@@ -2469,7 +2432,6 @@ void NodeDB::loadFromDisk()
     }
     spiLock->unlock();
 #endif
-    bool initializedEventConfig = false;
 #endif
 
     meshtastic_Config_SecurityConfig backupSecurity = meshtastic_Config_SecurityConfig_init_zero;
@@ -2568,9 +2530,8 @@ void NodeDB::loadFromDisk()
         LOG_WARN("NodeDatabase %d is old, discard", nodeDatabase.version);
         installDefaultNodeDatabase();
     } else if (nodeDatabase.version < DEVICESTATE_CUR_VER) {
-        if (migrateLegacyNodeDatabase())
-            migrationSavePending = true;
-        else
+        // Migrated in RAM each boot; the v25 file lands at the next user-initiated save.
+        if (!migrateLegacyNodeDatabase())
             installDefaultNodeDatabase();
     } else {
         meshNodes = &nodeDatabase.nodes;
@@ -2640,9 +2601,6 @@ void NodeDB::loadFromDisk()
             owner.is_licensed = nodeInfoLiteIsLicensed(us);
             owner.has_is_unmessagable = nodeInfoLiteHasIsUnmessagable(us);
             owner.is_unmessagable = nodeInfoLiteIsUnmessagable(us);
-
-            // Save the recovered owner to device state on disk
-            saveToDisk(SEGMENT_DEVICESTATE);
         }
     } else {
         LOG_INFO("Loaded saved devicestate v%d", devicestate.version);
@@ -2670,7 +2628,6 @@ void NodeDB::loadFromDisk()
             config.has_lora = true;
             config.lora = eventLora;
             state = LoadFileResult::LOAD_SUCCESS;
-            initializedEventConfig = true;
             LOG_INFO("Init event config without modifying %s", STANDARD_CONFIG_FILE_NAME);
         } else {
             // Keep the event load outcome because loadProto() clears config before decoding.
@@ -2693,6 +2650,7 @@ void NodeDB::loadFromDisk()
     } else if (state != LoadFileResult::LOAD_SUCCESS) {
         // No decodable config to work with: the file is absent (first boot) or could not be opened (OTHER_FAILURE
         // / NO_FILESYSTEM). Unlike DECODE_FAILED there are no usable contents to protect, so install defaults.
+        configFileMissingAtBoot = true;
         installDefaultConfig();
     } else if (config.version < DEVICESTATE_MIN_VER) {
         LOG_WARN("config %d is old, discard", config.version);
@@ -2741,19 +2699,10 @@ void NodeDB::loadFromDisk()
     config.lora.override_frequency = USERPREFS_LORACONFIG_OVERRIDE_FREQUENCY;
 #endif
 
-#if USERPREFS_EVENT_MODE
-    if (initializedEventConfig) {
-        // This is the first durable event-profile write.  A failed write is
-        // safe: normal files remain untouched and the next event boot retries.
-        if (!saveToDisk(SEGMENT_CONFIG))
-            LOG_ERROR("Can't persist initial event config");
-    }
-#endif
-
     if (backupSecurity.private_key.size > 0) {
         LOG_DEBUG("Restore security config backup");
         config.security = backupSecurity;
-        saveToDisk(SEGMENT_CONFIG);
+        identityRestorePending = true;
     }
 
     // Make sure we load hard coded admin keys even when the configuration file has none.
@@ -2803,9 +2752,8 @@ void NodeDB::loadFromDisk()
 #endif
 
     if (numAdminKeys > 0) {
-        LOG_INFO("Saving %d hard coded admin keys", numAdminKeys);
+        LOG_INFO("Applying %d hard coded admin keys", numAdminKeys);
         config.security.admin_key_count = numAdminKeys;
-        saveToDisk(SEGMENT_CONFIG);
     }
 
     state = loadProto(moduleConfigFileName, meshtastic_LocalModuleConfig_size, sizeof(meshtastic_LocalModuleConfig),
@@ -2828,7 +2776,6 @@ void NodeDB::loadFromDisk()
     if (!moduleConfig.has_traffic_management) {
         LOG_INFO("Traffic management never configured, installing always-on defaults");
         installTrafficManagementDefaults(moduleConfig);
-        saveToDisk(SEGMENT_MODULECONFIG);
     }
 
     state = loadProto(channelFileName, meshtastic_ChannelFile_size, sizeof(meshtastic_ChannelFile), &meshtastic_ChannelFile_msg,
@@ -2859,6 +2806,8 @@ void NodeDB::loadFromDisk()
     // files as plaintext - encryptAndWrite would fail anyway (no DEK), but
     // skipping the whole block avoids the wasted attempts and error logs.
     if (EncryptedStorage::isLockdownActive()) {
+        // One-time migration of a user-enabled lockdown; converges once every file is encrypted.
+        FlashGuard::Scope lockdownMigration("lockdown encryption migration");
         const char *filesToCheck[] = {configFileName, moduleConfigFileName, channelFileName, deviceStateFileName,
                                       nodeDatabaseFileName};
         const int segments[] = {SEGMENT_CONFIG, SEGMENT_MODULECONFIG, SEGMENT_CHANNELS, SEGMENT_DEVICESTATE,
@@ -2937,8 +2886,6 @@ void NodeDB::loadFromDisk()
             moduleConfig.neighbor_info.update_interval = 0;
         if (moduleConfig.paxcounter.paxcounter_update_interval == 900)
             moduleConfig.paxcounter.paxcounter_update_interval = 0;
-
-        saveToDisk(SEGMENT_MODULECONFIG);
     }
 
     // 2.8 - privacy: one-time flip of position sharing and device telemetry to OPT-IN for nodes upgrading
@@ -2950,18 +2897,15 @@ void NodeDB::loadFromDisk()
         LOG_INFO("Opt-in migration: disabling position broadcast on public channels");
         optInDisablePositionSharing(channelFile);
         channelFile.version = POSITION_TELEMETRY_OPTIN_VER;
-        saveToDisk(SEGMENT_CHANNELS);
     }
     if (moduleConfig.version < POSITION_TELEMETRY_OPTIN_VER) {
         LOG_INFO("Opt-in migration: forcing device telemetry broadcast to opt-in");
         optInDisableTelemetryBroadcast(moduleConfig);
         moduleConfig.version = POSITION_TELEMETRY_OPTIN_VER;
-        saveToDisk(SEGMENT_MODULECONFIG);
     }
 
     if (channels.ensureLicensedOperation()) {
-        LOG_WARN("Licensed operation removed persisted channel encryption/admin access");
-        saveToDisk(SEGMENT_CHANNELS);
+        LOG_WARN("Licensed operation removed channel encryption/admin access");
     }
 #if ARCH_PORTDUINO
     // The host's config.yaml is authoritative for admin keys: it is root-owned and cannot be
@@ -3033,12 +2977,6 @@ bool NodeDB::reloadFromDisk()
     // is valid at runtime) to trim/demote non-self overflow, pin self to index 0
     // and normalise the backing store before the node DB is exercised again.
     nodeDBSelfCare();
-
-    // Preserve constructor ordering: persist any migration only after self-care.
-    if (migrationSavePending) {
-        saveNodeDatabaseToDisk();
-        migrationSavePending = false;
-    }
 
     // Push the now-real config to the radio.
     if (rIface) {
@@ -3231,77 +3169,86 @@ bool NodeDB::saveNodeDatabaseToDisk()
     spiLock->unlock();
 #endif
 
-    // Project the maps into the on-disk vectors just before encoding; cleared
-    // again on the way out so we don't carry duplicate state.
+    // Favorites-only storage: flash holds our own node and favorites. Other nodes the user acted on
+    // (ignored, muted) keep their entry so the choice survives reboot, but never their key.
+    meshtastic_NodeDatabase onDisk{}; // not _init_zero: that brace-inits the vectors
+    onDisk.version = nodeDatabase.version;
+    const NodeNum ourNum = getNodeNum();
+    for (size_t i = 0; i < numMeshNodes; i++) {
+        meshtastic_NodeInfoLite n = meshNodes->at(i);
+        if (n.num == 0)
+            continue;
+        if (n.num != ourNum && !nodeInfoLiteIsFavorite(&n)) {
+            if (!(n.bitfield & (NODEINFO_BITFIELD_IS_IGNORED_MASK | NODEINFO_BITFIELD_IS_MUTED_MASK)))
+                continue;
+            n.public_key.size = 0;
+            memset(n.public_key.bytes, 0, sizeof(n.public_key.bytes));
+            n.bitfield &= ~(NODEINFO_BITFIELD_IS_KEY_MANUALLY_VERIFIED_MASK | NODEINFO_BITFIELD_HAS_XEDDSA_SIGNED_MASK);
+        }
+        onDisk.nodes.push_back(n);
+    }
+    [[maybe_unused]] auto keepSatellite = [&](NodeNum num) {
+        if (num == ourNum)
+            return true;
+        for (const auto &n : onDisk.nodes)
+            if (n.num == num)
+                return nodeInfoLiteIsFavorite(&n);
+        return false;
+    };
+
     concurrency::LockGuard guard(&satelliteMutex);
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
-    nodeDatabase.positions.clear();
-    nodeDatabase.positions.reserve(nodePositions.size());
     for (const auto &kv : nodePositions) {
+        if (!keepSatellite(kv.first))
+            continue;
         meshtastic_NodePositionEntry entry = meshtastic_NodePositionEntry_init_default;
         entry.num = kv.first;
         entry.has_position = true;
         entry.position = kv.second;
-        nodeDatabase.positions.push_back(entry);
+        onDisk.positions.push_back(entry);
     }
-#else
-    nodeDatabase.positions.clear();
 #endif
 
 #if !MESHTASTIC_EXCLUDE_TELEMETRYDB
-    nodeDatabase.telemetry.clear();
-    nodeDatabase.telemetry.reserve(nodeTelemetry.size());
     for (const auto &kv : nodeTelemetry) {
+        if (!keepSatellite(kv.first))
+            continue;
         meshtastic_NodeTelemetryEntry entry = meshtastic_NodeTelemetryEntry_init_default;
         entry.num = kv.first;
         entry.has_device_metrics = true;
         entry.device_metrics = kv.second;
-        nodeDatabase.telemetry.push_back(entry);
+        onDisk.telemetry.push_back(entry);
     }
-#else
-    nodeDatabase.telemetry.clear();
 #endif
 
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTDB
-    nodeDatabase.environment.clear();
-    nodeDatabase.environment.reserve(nodeEnvironment.size());
     for (const auto &kv : nodeEnvironment) {
+        if (!keepSatellite(kv.first))
+            continue;
         meshtastic_NodeEnvironmentEntry entry = meshtastic_NodeEnvironmentEntry_init_default;
         entry.num = kv.first;
         entry.has_environment_metrics = true;
         entry.environment_metrics = kv.second;
-        nodeDatabase.environment.push_back(entry);
+        onDisk.environment.push_back(entry);
     }
-#else
-    nodeDatabase.environment.clear();
 #endif
 
 #if !MESHTASTIC_EXCLUDE_STATUSDB
-    nodeDatabase.status.clear();
-    nodeDatabase.status.reserve(nodeStatus.size());
     for (const auto &kv : nodeStatus) {
+        if (!keepSatellite(kv.first))
+            continue;
         meshtastic_NodeStatusEntry entry = meshtastic_NodeStatusEntry_init_default;
         entry.num = kv.first;
         entry.has_status = true;
         entry.status = kv.second;
-        nodeDatabase.status.push_back(entry);
+        onDisk.status.push_back(entry);
     }
-#else
-    nodeDatabase.status.clear();
 #endif
 
     size_t nodeDatabaseSize;
-    pb_get_encoded_size(&nodeDatabaseSize, meshtastic_NodeDatabase_fields, &nodeDatabase);
-    bool ok = saveProto(nodeDatabaseFileName, nodeDatabaseSize, &meshtastic_NodeDatabase_msg, &nodeDatabase, false);
-
-    nodeDatabase.positions.clear();
-    nodeDatabase.positions.shrink_to_fit();
-    nodeDatabase.telemetry.clear();
-    nodeDatabase.telemetry.shrink_to_fit();
-    nodeDatabase.environment.clear();
-    nodeDatabase.environment.shrink_to_fit();
-    nodeDatabase.status.clear();
-    nodeDatabase.status.shrink_to_fit();
+    pb_get_encoded_size(&nodeDatabaseSize, meshtastic_NodeDatabase_fields, &onDisk);
+    LOG_INFO("NodeDB: persisting %u of %u nodes", (unsigned)onDisk.nodes.size(), (unsigned)numMeshNodes);
+    bool ok = saveProto(nodeDatabaseFileName, nodeDatabaseSize, &meshtastic_NodeDatabase_msg, &onDisk, false);
     return ok;
 }
 
