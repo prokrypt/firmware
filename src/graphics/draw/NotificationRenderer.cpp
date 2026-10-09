@@ -2,6 +2,7 @@
 
 #if HAS_SCREEN
 #include "DisplayFormatters.h"
+#include "FlashGuard.h"
 #include "NodeDB.h"
 #include "NotificationRenderer.h"
 #include "UIRenderer.h"
@@ -19,6 +20,7 @@
 #include "main.h"
 #include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 #if HAS_TRACKBALL
 #include "input/TrackballInterruptImpl1.h"
@@ -44,6 +46,14 @@ namespace graphics
 {
 int bannerSignalBars = -1;
 InputEvent NotificationRenderer::inEvent;
+
+// Banner choices run here at draw time, after the input event's FlashGuard scope has closed. They only fire on the
+// user's SELECT, so each gets a user scope of its own.
+template <typename F, typename... A> static void runUserChoice(F &&f, A &&...args)
+{
+    FlashGuard::Scope userWrite("menu");
+    f(std::forward<A>(args)...);
+}
 int8_t NotificationRenderer::curSelected = 0;
 char NotificationRenderer::alertBannerMessage[256] = {0};
 uint32_t NotificationRenderer::alertBannerUntil = 0;  // 0 is a special case meaning forever
@@ -376,10 +386,10 @@ void NotificationRenderer::drawCharPicker(OLEDDisplay *display, OLEDDisplayUiSta
             textInputCallback = nullptr;
             resetBanner();
             if (callback)
-                callback(result);
+                runUserChoice(callback, result);
         } else {
             if (alertBannerCallback)
-                alertBannerCallback(currentNumber);
+                runUserChoice(alertBannerCallback, currentNumber);
             resetBanner();
         }
         return;
@@ -429,7 +439,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
                inEvent.inputEvent == INPUT_BROKER_USER_PRESS || inEvent.inputEvent == INPUT_BROKER_DOWN_LONG) {
         curSelected++;
     } else if (inEvent.inputEvent == INPUT_BROKER_SELECT) {
-        alertBannerCallback(selectedNodenum);
+        runUserChoice(alertBannerCallback, selectedNodenum);
         resetBanner();
         return;
     } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG) &&
@@ -564,10 +574,10 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
             curSelected++;
         } else if (inEvent.inputEvent == INPUT_BROKER_SELECT) {
             if (optionsEnumPtr != nullptr) {
-                alertBannerCallback(optionsEnumPtr[curSelected]);
+                runUserChoice(alertBannerCallback, optionsEnumPtr[curSelected]);
                 optionsEnumPtr = nullptr;
             } else {
-                alertBannerCallback(curSelected);
+                runUserChoice(alertBannerCallback, curSelected);
             }
             resetBanner();
             return;

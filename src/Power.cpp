@@ -15,6 +15,7 @@
  */
 #include "Power.h"
 #include "BluetoothCommon.h"
+#include "FlashGuard.h"
 #include "MessageStore.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
@@ -26,6 +27,7 @@
 #include "main.h"
 #include "memory/MemAudit.h"
 #include "meshUtils.h"
+#include "modules/HopScalingModule.h"
 #include "power/PowerHAL.h"
 #include "power/SGM41562.h"
 #include "sleep.h"
@@ -886,8 +888,28 @@ bool Power::ads1115Init()
 }
 #endif // HAS_ADS1115
 
+// rebootAtMsec as last set inside a user action's FlashGuard scope (admin, input, menus).
+static uint32_t userRebootAtMsec = 0;
+
+// The user's own shutdown or reboot is the one time state the firmware gathered on its own reaches flash.
+static void saveForUserPowerOff()
+{
+    FlashGuard::Scope userWrite("user shutdown/reboot");
+#if HAS_SCREEN
+    messageStore.saveToFlash();
+#endif
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+    waypointStore.saveToFlash();
+#endif
+#if HAS_VARIABLE_HOPS
+    if (hopScalingModule)
+        hopScalingModule->saveToDisk();
+#endif
+}
+
 Power::Power() : OSThread("Power")
 {
+    FlashGuard::watchForUserChange(&rebootAtMsec, &userRebootAtMsec);
     statusHandler = {};
     low_voltage_counter = 0;
 #ifdef DEBUG_HEAP
@@ -1032,9 +1054,9 @@ void Power::powerCommandsCheck()
 void Power::reboot()
 {
     notifyReboot.notifyObservers(NULL);
-#if !MESHTASTIC_EXCLUDE_WAYPOINT
-    waypointStore.saveToFlash();
-#endif
+    // Automatic reboots (stuck-TX watchdog, radio recovery, region mismatch, session expiry) write nothing.
+    if (rebootAtMsec != 0 && rebootAtMsec == userRebootAtMsec)
+        saveForUserPowerOff();
 #if defined(ARCH_ESP32)
     ESP.restart();
 #elif defined(ARCH_NRF52)
@@ -1096,13 +1118,11 @@ void Power::shutdown()
 #if !defined(ARCH_STM32WL)
     playShutdownMelody();
 #endif
-    nodeDB->saveToDisk();
-#if HAS_SCREEN
-    messageStore.saveToFlash();
-#endif
-#if !MESHTASTIC_EXCLUDE_WAYPOINT
-    waypointStore.saveToFlash();
-#endif
+    {
+        FlashGuard::Scope userWrite("user shutdown");
+        nodeDB->saveToDisk();
+    }
+    saveForUserPowerOff();
 #if defined(ARCH_NRF52) || defined(ARCH_ESP32) || defined(ARCH_RP2040) || defined(ARCH_STM32WL)
 #ifdef PIN_LED1
     ledOff(PIN_LED1);

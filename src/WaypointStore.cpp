@@ -5,8 +5,6 @@
 #include "FSCommon.h"
 #include "SPILock.h"
 #include "SafeFile.h"
-#include "Throttle.h"
-#include "UptimeClock.h"
 #include "WaypointStore.h"
 #include "concurrency/LockGuard.h"
 #include "gps/RTC.h"
@@ -20,10 +18,6 @@ namespace
 
 constexpr uint8_t WAYPOINT_STORE_VERSION = 3;
 constexpr const char *WAYPOINT_STORE_FILENAME = "/Waypoints_default.wpts";
-
-#ifndef WAYPOINT_AUTOSAVE_INTERVAL_SEC
-#define WAYPOINT_AUTOSAVE_INTERVAL_SEC (2 * 60 * 60)
-#endif
 
 struct __attribute__((packed)) StoredWaypointRecord {
     uint32_t creatorNodeNum;
@@ -44,28 +38,13 @@ uint16_t encodeWaypointPayload(const meshtastic_Waypoint &wp, uint8_t *payload, 
     return (uint16_t)pb_encode_to_bytes(payload, payloadCapacity, &meshtastic_Waypoint_msg, &wp);
 }
 
+// No autosave. The store reaches flash when the user edits a waypoint (saved at once) and on a user
+// shutdown or reboot; waypoints received from the mesh, and expiry, stay in RAM until then.
 static bool g_waypointStoreHasUnsavedChanges = false;
-static uint32_t g_lastWaypointAutoSaveMs = 0;
-
-uint32_t autosaveIntervalMs()
-{
-    uint32_t sec = (uint32_t)WAYPOINT_AUTOSAVE_INTERVAL_SEC;
-    if (sec < 60)
-        sec = 60;
-    return sec * 1000UL;
-}
 
 void markWaypointStoreUnsaved()
 {
     g_waypointStoreHasUnsavedChanges = true;
-    if (g_lastWaypointAutoSaveMs == 0)
-        g_lastWaypointAutoSaveMs = Time::getMillis();
-}
-
-void persistWaypointStore()
-{
-    LOG_INFO("Autosaving WaypointStore to flash");
-    waypointStore.saveToFlash();
 }
 
 } // namespace
@@ -147,6 +126,7 @@ bool WaypointStore::removeWaypoint(uint32_t id)
 
 #if ENABLE_WAYPOINT_PERSISTENCE
     markWaypointStoreUnsaved();
+    saveToFlash(); // only the user removes a waypoint (menus); save it now
 #endif
     notifyChanged();
 
@@ -169,6 +149,7 @@ bool WaypointStore::setNotificationPreference(uint32_t id, WaypointNotificationP
 
 #if ENABLE_WAYPOINT_PERSISTENCE
         markWaypointStoreUnsaved();
+        saveToFlash(); // a menu toggle; save it now
 #endif
         notifyChanged();
         return true;
@@ -293,7 +274,6 @@ void WaypointStore::saveToFlash()
 
 #if ENABLE_WAYPOINT_PERSISTENCE
     g_waypointStoreHasUnsavedChanges = false;
-    g_lastWaypointAutoSaveMs = Time::getMillis();
 #endif
 }
 
@@ -348,7 +328,6 @@ void WaypointStore::loadFromFlash()
 
 #if ENABLE_WAYPOINT_PERSISTENCE
     g_waypointStoreHasUnsavedChanges = false;
-    g_lastWaypointAutoSaveMs = Time::getMillis();
 #endif
 }
 
@@ -381,29 +360,10 @@ void WaypointStore::clearAllWaypoints()
 
 #if ENABLE_WAYPOINT_PERSISTENCE
     g_waypointStoreHasUnsavedChanges = false;
-    g_lastWaypointAutoSaveMs = Time::getMillis();
 #endif
 
     if (hadWaypoints)
         notifyChanged();
 }
-
-#if ENABLE_WAYPOINT_PERSISTENCE
-void waypointStoreAutosaveTick()
-{
-    if (!g_waypointStoreHasUnsavedChanges) {
-        if (g_lastWaypointAutoSaveMs == 0)
-            g_lastWaypointAutoSaveMs = Time::getMillis();
-        return;
-    }
-
-    if (g_lastWaypointAutoSaveMs == 0) {
-        g_lastWaypointAutoSaveMs = Time::getMillis();
-        return;
-    }
-
-    Throttle::execute(&g_lastWaypointAutoSaveMs, autosaveIntervalMs(), persistWaypointStore);
-}
-#endif
 
 #endif

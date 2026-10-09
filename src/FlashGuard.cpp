@@ -10,8 +10,10 @@ static std::atomic<int> depth{0};
 static const char *currentReason = nullptr;
 static std::atomic<uint32_t> totalWrites{0};
 static std::atomic<uint32_t> unscopedWrites{0};
+static const volatile uint32_t *watchedValue = nullptr;
+static uint32_t *watchedLatch = nullptr;
 
-Scope::Scope(const char *reason) : previousReason(currentReason)
+Scope::Scope(const char *reason) : previousReason(currentReason), watchedAtEntry(watchedValue ? *watchedValue : 0)
 {
     currentReason = reason;
     depth++;
@@ -19,8 +21,16 @@ Scope::Scope(const char *reason) : previousReason(currentReason)
 
 Scope::~Scope()
 {
+    if (watchedValue && watchedLatch && *watchedValue != watchedAtEntry)
+        *watchedLatch = *watchedValue;
     depth--;
     currentReason = previousReason;
+}
+
+void watchForUserChange(const volatile uint32_t *watched, uint32_t *latch)
+{
+    watchedValue = watched;
+    watchedLatch = latch;
 }
 
 bool inScope()

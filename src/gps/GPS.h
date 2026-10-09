@@ -179,10 +179,11 @@ class GPS : private concurrency::OSThread
     virtual bool lookForLocation();
     // Load persisted GPS model+baud from /prefs.
     bool loadProbeCache();
-    // Clear persisted GPS model+baud cache.
-    void clearProbeCache();
-    // Persist the currently detected GPS model+baud.
-    bool saveProbeCache() const;
+    // Stop trusting the cache for this boot. RAM only: the file stays, so a probe that finds the same
+    // hardware again (a GPS that was just slow to answer) writes nothing.
+    void forgetProbeCache();
+    // Persist the detected GPS model+baud, but only when no file exists or the file names different hardware.
+    bool saveProbeCache();
     // Verify the cached model+baud still maps to a live GPS device.
     bool verifyCachedProbePresence();
 
@@ -190,6 +191,10 @@ class GPS : private concurrency::OSThread
     int32_t detectedBaud = GPS_BAUDRATE;
     int32_t cachedProbeBaud = 0;
     GnssModel_t cachedProbeModel = GNSS_MODEL_UNKNOWN;
+    // What the cache file on flash says, kept even after forgetProbeCache() so saveProbeCache() can compare.
+    bool probeCacheOnFlash = false;
+    int32_t flashProbeBaud = 0;
+    GnssModel_t flashProbeModel = GNSS_MODEL_UNKNOWN;
 
     TinyGPSPlus reader;
     uint8_t fixQual = 0; // fix quality from GPGGA

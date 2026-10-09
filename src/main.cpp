@@ -1566,14 +1566,8 @@ void loop()
     }
 #endif
 #endif
-#if (HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)) && ENABLE_MESSAGE_PERSISTENCE
-    messageStoreAutosaveTick();
-#endif
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
-    waypointStore.purgeExpired();
-#endif
-#if !MESHTASTIC_EXCLUDE_WAYPOINT && ENABLE_WAYPOINT_PERSISTENCE
-    waypointStoreAutosaveTick();
+    waypointStore.purgeExpired(); // RAM only; waypoints reach flash on a user shutdown/reboot
 #endif
     long delayMsec = mainController.runOrDelay();
 

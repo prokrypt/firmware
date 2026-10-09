@@ -16,6 +16,7 @@ class Scope
 
   private:
     const char *previousReason;
+    uint32_t watchedAtEntry;
 };
 
 bool inScope();
@@ -23,6 +24,10 @@ bool inScope();
 /// Call immediately before any flash mutation (write, erase, remove, format, NVS put).
 /// Returns false if the write must not proceed.
 bool noteWrite(const char *what);
+
+/// Latch into *latch the value *watched holds whenever a Scope changes it. Lets code that acts later (a
+/// scheduled reboot) tell whether a user action scheduled it. One watch; a second call replaces the first.
+void watchForUserChange(const volatile uint32_t *watched, uint32_t *latch);
 
 uint32_t writesSinceBoot();
 uint32_t unscopedWritesSinceBoot();

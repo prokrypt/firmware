@@ -100,6 +100,7 @@ class HopScalingTestShim : public HopScalingModule
         filteringDenomHoldRollsRemaining = holdRolls;
     }
     uint8_t getFilteringDenomHoldRollsRemaining() const { return filteringDenomHoldRollsRemaining; }
+    uint32_t seenBitsAt(uint8_t i) const { return entries[i].seenHoursAgo; }
 
     /// Put the congestion gate directly into a state, bypassing the confirm counter, and seed the
     /// EMA to a value consistent with it so the next runOnce() does not immediately count toward
@@ -1040,6 +1041,90 @@ void test_fuzz_nodenum_blitz(void)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tests - Saved snapshot (written only on a user shutdown/reboot)
+// ---------------------------------------------------------------------------
+
+// The snapshot carries its save time; on the next boot it waits for a clock, ages by the hours since,
+// merges into what was heard since boot, and is dropped once 13 h old (the width of the seen bitmap).
+static constexpr uint32_t kSavedAt = 1800000000u;
+
+static void fillSnapshotSource(HopScalingTestShim &before)
+{
+    for (uint32_t id = 1; id <= 30; id++)
+        before.samplePacketForHistogram(id * 7919u, static_cast<uint8_t>(id % 4u));
+    before.rollHourTest();
+    before.rollHourTest(); // every entry now reads "seen 2 h ago"
+}
+
+void test_snapshot_waits_for_a_clock()
+{
+    HopScalingTestShim before;
+    fillSnapshotSource(before);
+    HopScalingTestShim after;
+    after.stageSnapshotForTest(before, kSavedAt);
+
+    HopScalingModule::s_testEpoch = 0;
+    after.adoptSnapshotForTest();
+    TEST_ASSERT_TRUE(after.hasPendingSnapshot());
+    TEST_ASSERT_EQUAL_UINT8(0, after.getEntryCount());
+}
+
+void test_snapshot_ages_and_merges_with_live_samples()
+{
+    HopScalingTestShim before;
+    fillSnapshotSource(before);
+    TEST_ASSERT_EQUAL_UINT32(0b100u, before.seenBitsAt(0));
+    HopScalingTestShim after;
+    after.stageSnapshotForTest(before, kSavedAt);
+    after.samplePacketForHistogram(1u * 7919u, 1); // heard again since boot
+    after.samplePacketForHistogram(999999u, 2);    // new since boot
+
+    HopScalingModule::s_testEpoch = kSavedAt + 3u * 3600u;
+    after.adoptSnapshotForTest();
+    TEST_ASSERT_FALSE(after.hasPendingSnapshot());
+    TEST_ASSERT_EQUAL_UINT8(31, after.getEntryCount());
+    TEST_ASSERT_EQUAL_UINT32(1u | (0b100u << 3), after.seenBitsAt(0)); // live bit OR the snapshot's, 3 h older
+}
+
+void test_snapshot_expires_at_thirteen_hours()
+{
+    HopScalingTestShim before;
+    fillSnapshotSource(before);
+
+    HopScalingTestShim stillValid;
+    stillValid.stageSnapshotForTest(before, kSavedAt);
+    HopScalingModule::s_testEpoch = kSavedAt + 9u * 3600u;
+    stillValid.adoptSnapshotForTest();
+    TEST_ASSERT_EQUAL_UINT8(30, stillValid.getEntryCount());
+    TEST_ASSERT_EQUAL_UINT32(1u << 11, stillValid.seenBitsAt(0));
+
+    HopScalingTestShim agedOut; // seen 2 h before the save + 11 h since = past the window
+    agedOut.stageSnapshotForTest(before, kSavedAt);
+    HopScalingModule::s_testEpoch = kSavedAt + 11u * 3600u;
+    agedOut.adoptSnapshotForTest();
+    TEST_ASSERT_EQUAL_UINT8(0, agedOut.getEntryCount());
+
+    HopScalingTestShim expired;
+    expired.stageSnapshotForTest(before, kSavedAt);
+    HopScalingModule::s_testEpoch = kSavedAt + 13u * 3600u;
+    expired.adoptSnapshotForTest();
+    TEST_ASSERT_FALSE(expired.hasPendingSnapshot());
+    TEST_ASSERT_EQUAL_UINT8(0, expired.getEntryCount());
+}
+
+void test_snapshot_from_the_future_is_dropped()
+{
+    HopScalingTestShim before;
+    fillSnapshotSource(before);
+    HopScalingTestShim after;
+    after.stageSnapshotForTest(before, kSavedAt);
+    HopScalingModule::s_testEpoch = kSavedAt - 60u;
+    after.adoptSnapshotForTest();
+    TEST_ASSERT_FALSE(after.hasPendingSnapshot());
+    TEST_ASSERT_EQUAL_UINT8(0, after.getEntryCount());
+}
+
 void setUp(void)
 {
     if (!mockNodeDB)
@@ -1057,6 +1142,7 @@ void setUp(void)
 
     // Reset mock clock to a known base (1 hour in so subtraction never underflows)
     mockTime = ONE_HOUR_MS;
+    HopScalingModule::s_testEpoch = 0;
 }
 
 void tearDown(void)
@@ -1084,6 +1170,10 @@ void setup()
     RUN_TEST(test_hourly_roll);
     RUN_TEST(test_intermediate_status);
     RUN_TEST(test_startup_blank_state);
+    RUN_TEST(test_snapshot_waits_for_a_clock);
+    RUN_TEST(test_snapshot_ages_and_merges_with_live_samples);
+    RUN_TEST(test_snapshot_expires_at_thirteen_hours);
+    RUN_TEST(test_snapshot_from_the_future_is_dropped);
 
     printf("\n=== Congestion gate ===\n");
     RUN_TEST(test_congestion_gate_idle_channel_does_not_scale);

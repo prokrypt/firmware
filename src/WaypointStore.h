@@ -66,10 +66,6 @@ class WaypointStore : public Observable<const WaypointStore *>
     std::deque<StoredWaypoint> waypoints;
 };
 
-#if ENABLE_WAYPOINT_PERSISTENCE
-void waypointStoreAutosaveTick();
-#endif
-
 extern WaypointStore waypointStore;
 
 #endif

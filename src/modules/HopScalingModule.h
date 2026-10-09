@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 #if HAS_VARIABLE_HOPS
 
@@ -154,7 +155,12 @@ class HopScalingModule : private concurrency::OSThread
     // -----------------------------------------------------------------------
 
     HopScalingModule();
-    ~HopScalingModule() = default;
+    ~HopScalingModule();
+
+    /// Persist the histogram. Call only from a user shutdown or reboot; it skips the write when there is no
+    /// valid clock, since a snapshot without a save time could never be aged. On load the snapshot waits
+    /// for the clock, is aged by the hours since it was saved, and is discarded once 13 h old.
+    void saveToDisk();
 
     /// Reset all entries and state.
     void clear();
@@ -208,6 +214,13 @@ class HopScalingModule : private concurrency::OSThread
     /// Override the per-session hash seed. Use in tests that need a specific sampling distribution.
     // Drives channelUtilizationPercent() in PIO_UNIT_TESTING builds, as s_testNowMs drives nowMs().
     inline static float s_testChannelUtil = 0.0f;
+
+    // Wall clock for snapshot aging in PIO_UNIT_TESTING builds; 0 = no valid clock.
+    inline static uint32_t s_testEpoch = 0;
+    /// Stage `from`'s histogram as the snapshot loaded at boot, saved at savedAtEpoch.
+    void stageSnapshotForTest(const HopScalingModule &from, uint32_t savedAtEpoch);
+    bool hasPendingSnapshot() const { return pendingSnapshot != nullptr; }
+    void adoptSnapshotForTest() { adoptSnapshotIfReady(); }
     void setHashSeed(uint16_t seed) { hashSeed = seed; }
     uint16_t getHashSeed() const { return hashSeed; }
     /// Expose hashNodeId for tests that need to compute which node IDs pass a given denominator.
@@ -248,18 +261,16 @@ class HopScalingModule : private concurrency::OSThread
     // Persistence
     // -----------------------------------------------------------------------
 
-    /// Persist the histogram state (entries, denominators, hold-timer) to flash.
-    /// No-op on platforms without a filesystem.  Performs a full delete-and-rewrite of
-    /// the state file on each call; avoid calling more frequently than once per rollHour().
-    void saveToDisk() const;
+    struct PersistedHistogram;
 
-    /// Restore histogram state from flash.  Safe to call even when no file exists.
-    /// Call once after construction, before the first rollHour(), to warm-start the
-    /// histogram across reboots without waiting 13 hours for data to re-accumulate.
-    /// The restored entries are available immediately for sampling, but the first
-    /// rollHour() (triggered by the second runOnce() tick) is needed before a warm-start
-    /// recommendation replaces the HOP_MAX boot default.
+    /// Read a saved snapshot into pendingSnapshot and take its hash seed. Safe when no file exists.
     void loadFromDisk();
+
+    /// Once the clock is valid, age pendingSnapshot by the hours since it was saved and merge it into the
+    /// live histogram, or drop it if it is 13 h old or no clock arrives within 13 h of boot.
+    void adoptSnapshotIfReady();
+    void discardSnapshot(const char *why);
+    std::unique_ptr<PersistedHistogram> pendingSnapshot;
 
     /// Remove stale entries (seen-bits all zero) and, if the list is still crowded,
     /// double samplingDenominator and filteringDenominator and remove non-matching entries.
@@ -368,8 +379,10 @@ class HopScalingModule : private concurrency::OSThread
     // Clock - public so tests can share the same timebase via HopScalingModule::s_testNowMs
 #ifdef PIO_UNIT_TESTING
     static uint32_t nowMs() { return s_testNowMs; }
+    static uint32_t wallClock() { return s_testEpoch; }
 #else
     static uint32_t nowMs() { return millis(); }
+    static uint32_t wallClock();
 #endif
 };
 

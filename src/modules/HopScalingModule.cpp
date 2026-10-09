@@ -7,8 +7,10 @@
 #include "FSCommon.h"
 #include "NodeDB.h"
 #include "SPILock.h"
+#include "UptimeClock.h"
 #include "airtime.h"
 #include "concurrency/LockGuard.h"
+#include "gps/RTC.h"
 #include "mesh-pb-constants.h"
 #include <algorithm>
 #include <cmath>
@@ -21,26 +23,27 @@ constexpr uint32_t INITIAL_DELAY_MS = 30 * 1000UL;    // Startup grace period be
 constexpr uint32_t RUN_INTERVAL_MS = 5 * 60 * 1000UL; // Emit micro-summary every 5 minutes
 // RUNS_PER_HOUR is a public class constant in HopScalingModule.h
 
-// Persistence
-// Note: this only needs incrementing if the published arrangement changes. For testing purposes, or prior to widespread release,
-// it can stay the same even if the internal layout changes.
-constexpr uint32_t HISTOGRAM_STATE_MAGIC = 0x48535432; // 'HST2' - layout v2
+// Persistence: written only on a user shutdown or reboot, never on a timer.
+// 'HST3' adds the save time; an older file (no save time, so no way to age it) fails the magic check.
+constexpr uint32_t HISTOGRAM_STATE_MAGIC = 0x48535433; // 'HST3'
 constexpr uint8_t HISTOGRAM_STATE_VERSION = 1;
 constexpr const char *HISTOGRAM_STATE_FILE = "/prefs/hopScalingState.bin";
+constexpr uint8_t SEEN_WINDOW_HOURS = 13; // width of Record::seenHoursAgo
+
+} // namespace
 
 #pragma pack(push, 1)
-struct PersistedHistogram {
+struct HopScalingModule::PersistedHistogram {
     uint32_t magic;
     uint8_t version;
     uint8_t samplingDenominator;
     uint8_t filteringDenominator;
     uint8_t filterDenomHoldRollsRemaining; // rollHour() calls remaining in the hold; 0 when expired/not active
     uint16_t hashSeed;
+    uint32_t savedAtEpoch;                      // wall clock at save; the snapshot ages against it
     Record entries[HopScalingModule::CAPACITY]; // full 512-byte array; count derived on load
 };
 #pragma pack(pop)
-
-} // namespace
 
 HopScalingModule *hopScalingModule;
 
@@ -55,6 +58,27 @@ HopScalingModule::HopScalingModule() : concurrency::OSThread("HopScaling")
     setIntervalFromNow(INITIAL_DELAY_MS);
 }
 
+HopScalingModule::~HopScalingModule() = default;
+
+#ifndef PIO_UNIT_TESTING
+uint32_t HopScalingModule::wallClock()
+{
+    return getValidTime(RTCQualityDevice);
+}
+#else
+void HopScalingModule::stageSnapshotForTest(const HopScalingModule &from, uint32_t savedAtEpoch)
+{
+    pendingSnapshot.reset(new PersistedHistogram{});
+    pendingSnapshot->samplingDenominator = from.samplingDenominator;
+    pendingSnapshot->filteringDenominator = from.filteringDenominator;
+    pendingSnapshot->filterDenomHoldRollsRemaining = from.filteringDenomHoldRollsRemaining;
+    pendingSnapshot->hashSeed = from.hashSeed;
+    pendingSnapshot->savedAtEpoch = savedAtEpoch;
+    memcpy(pendingSnapshot->entries, from.entries, sizeof(from.entries));
+    hashSeed = from.hashSeed;
+}
+#endif
+
 void HopScalingModule::clear()
 {
     memset(entries, 0, sizeof(entries));
@@ -67,6 +91,7 @@ void HopScalingModule::clear()
     lastPoliteNumer = POLITENESS_DEFAULT;
     lastTrendStats = {};
     memset(denominatorHistory, DENOM_MIN, sizeof(denominatorHistory));
+    pendingSnapshot.reset();
 #ifndef PIO_UNIT_TESTING
     hashSeed = static_cast<uint16_t>(random());
 #else
@@ -78,9 +103,20 @@ void HopScalingModule::clear()
 // Persistence
 // ---------------------------------------------------------------------------
 
-void HopScalingModule::saveToDisk() const
+void HopScalingModule::saveToDisk()
 {
 #ifdef FSCom
+    // Fold in a snapshot still waiting for a clock, so a shutdown soon after boot doesn't lose it.
+    adoptSnapshotIfReady();
+
+    const uint32_t now = wallClock();
+    if (now == 0) {
+        LOG_INFO("[HOPSCALE] No clock, not saving: the snapshot could never be aged");
+        return;
+    }
+    if (count == 0)
+        return;
+
     FSCom.mkdir("/prefs");
     PersistedHistogram state{};
     state.magic = HISTOGRAM_STATE_MAGIC;
@@ -89,6 +125,7 @@ void HopScalingModule::saveToDisk() const
     state.filteringDenominator = filteringDenominator;
     state.filterDenomHoldRollsRemaining = filteringDenomHoldRollsRemaining;
     state.hashSeed = hashSeed;
+    state.savedAtEpoch = now;
     // Save all CAPACITY slots; count is reconstructed on load by scanning seenHoursAgo.
     memcpy(state.entries, entries, sizeof(state.entries));
     auto file = SafeFile(HISTOGRAM_STATE_FILE, true);
@@ -101,38 +138,113 @@ void HopScalingModule::saveToDisk() const
 void HopScalingModule::loadFromDisk()
 {
 #ifdef FSCom
-    concurrency::LockGuard g(spiLock);
-    auto file = FSCom.open(HISTOGRAM_STATE_FILE, FILE_O_READ);
-    if (!file)
-        return;
-    PersistedHistogram state{};
-    const bool readOk = (file.read(reinterpret_cast<uint8_t *>(&state), sizeof(state)) == sizeof(state));
-    file.close();
+    auto state = std::unique_ptr<PersistedHistogram>(new PersistedHistogram{});
+    {
+        concurrency::LockGuard g(spiLock);
+        auto file = FSCom.open(HISTOGRAM_STATE_FILE, FILE_O_READ);
+        if (!file)
+            return;
+        const bool readOk = (file.read(reinterpret_cast<uint8_t *>(state.get()), sizeof(*state)) == sizeof(*state));
+        file.close();
+        if (!readOk)
+            return;
+    }
     // Validate magic, version, denom range, denom power-of-two invariant, and hold counter.
-    if (!readOk || state.magic != HISTOGRAM_STATE_MAGIC || state.version != HISTOGRAM_STATE_VERSION ||
-        state.samplingDenominator < DENOM_MIN || state.samplingDenominator > DENOM_MAX ||
-        state.filteringDenominator < state.samplingDenominator || state.filteringDenominator > DENOM_MAX ||
-        !is_pow_of_2(state.samplingDenominator) || !is_pow_of_2(state.filteringDenominator) ||
-        state.filterDenomHoldRollsRemaining > FILTER_DENOM_HOLD_ROLLS) {
+    if (state->magic != HISTOGRAM_STATE_MAGIC || state->version != HISTOGRAM_STATE_VERSION ||
+        state->samplingDenominator < DENOM_MIN || state->samplingDenominator > DENOM_MAX ||
+        state->filteringDenominator < state->samplingDenominator || state->filteringDenominator > DENOM_MAX ||
+        !is_pow_of_2(state->samplingDenominator) || !is_pow_of_2(state->filteringDenominator) ||
+        state->filterDenomHoldRollsRemaining > FILTER_DENOM_HOLD_ROLLS || state->savedAtEpoch == 0) {
         return;
     }
-    // Derive count by scanning: active entries have seenHoursAgo != 0; pack them to the front.
+    // The snapshot is held until the clock says how old it is. Take its hash seed now so nodes sampled
+    // in the meantime hash the same way and merge with it.
+    hashSeed = state->hashSeed;
+    pendingSnapshot = std::move(state);
+#endif
+}
 
-    uint8_t restored = 0;
-    for (uint8_t i = 0; i < CAPACITY && restored < CAPACITY; i++) {
-        if (state.entries[i].seenHoursAgo != 0u) {
-            entries[restored++] = state.entries[i];
+void HopScalingModule::discardSnapshot(const char *why)
+{
+    LOG_INFO("[HOPSCALE] Saved histogram discarded: %s", why);
+    pendingSnapshot.reset();
+}
+
+void HopScalingModule::adoptSnapshotIfReady()
+{
+    if (!pendingSnapshot)
+        return;
+
+    const uint32_t now = wallClock();
+    if (now == 0) {
+        // Without a clock its age is unknown; once we've been up a full window it would be expired anyway.
+        if (Time::getUptimeSecs() >= SEEN_WINDOW_HOURS * 3600UL)
+            discardSnapshot("no clock within the 13 h window");
+        return;
+    }
+    const PersistedHistogram &snap = *pendingSnapshot;
+    if (snap.savedAtEpoch > now) {
+        discardSnapshot("saved in the future");
+        return;
+    }
+    const uint32_t ageHours = (now - snap.savedAtEpoch + 1800) / 3600;
+    if (ageHours >= SEEN_WINDOW_HOURS) {
+        discardSnapshot("older than 13 h");
+        return;
+    }
+
+    // Age the snapshot's denominator hold the way ageHours of rollHour() calls would have.
+    uint8_t snapFilt = snap.filteringDenominator;
+    uint8_t snapHold = snap.filterDenomHoldRollsRemaining;
+    for (uint32_t h = 0; h < ageHours && snapFilt > snap.samplingDenominator; h++) {
+        if (snapHold > 0)
+            snapHold--;
+        if (snapHold == 0) {
+            const uint8_t stepped = static_cast<uint8_t>(snapFilt / 2u);
+            snapFilt = (stepped > snap.samplingDenominator) ? stepped : snap.samplingDenominator;
         }
     }
-    this->count = restored;
-    samplingDenominator = state.samplingDenominator;
-    filteringDenominator = state.filteringDenominator;
-    filteringDenomHoldRollsRemaining = state.filterDenomHoldRollsRemaining;
-    // denominatorHistory can't be recovered; initialise all slots to filteringDenominator so
-    // the first few post-reboot scaledPerHour values use a safe (slightly conservative) multiplier.
-    memset(denominatorHistory, filteringDenominator, sizeof(denominatorHistory));
-    hashSeed = state.hashSeed;
-#endif
+    samplingDenominator = std::max(samplingDenominator, snap.samplingDenominator);
+    filteringDenominator = std::max({filteringDenominator, snapFilt, samplingDenominator});
+    filteringDenomHoldRollsRemaining = std::max(filteringDenomHoldRollsRemaining, snapHold);
+
+    // Merge: live entries first (their hop counts are fresher), then the aged snapshot, OR-ing seen bits on a match.
+    Record merged[CAPACITY] = {};
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < count; i++) {
+        if (passesFilter(entries[i].nodeHash, samplingDenominator))
+            merged[n++] = entries[i];
+    }
+    for (uint8_t i = 0; i < CAPACITY; i++) {
+        const uint32_t seen = (static_cast<uint32_t>(snap.entries[i].seenHoursAgo) << ageHours) & 0x1FFFu;
+        if (seen == 0u || !passesFilter(snap.entries[i].nodeHash, samplingDenominator))
+            continue;
+        bool matched = false;
+        for (uint8_t j = 0; j < n; j++) {
+            if (merged[j].nodeHash == snap.entries[i].nodeHash) {
+                merged[j].seenHoursAgo |= seen;
+                matched = true;
+                break;
+            }
+        }
+        if (!matched && n < CAPACITY) {
+            merged[n] = snap.entries[i];
+            merged[n].seenHoursAgo = seen;
+            n++;
+        }
+    }
+    memcpy(entries, merged, sizeof(entries));
+    this->count = n;
+    // denominatorHistory can't be recovered; raise every slot to the filter so post-boot hourly
+    // estimates use a safe (slightly conservative) multiplier.
+    for (uint8_t h = 0; h < SEEN_WINDOW_HOURS; h++)
+        denominatorHistory[h] = std::max(denominatorHistory[h], filteringDenominator);
+    if (getFillPercentage() >= FILL_HIGH_PCT)
+        trimIfNeeded();
+
+    LOG_INFO("[HOPSCALE] Saved histogram adopted: %u h old, %u entries", static_cast<unsigned>(ageHours),
+             static_cast<unsigned>(count));
+    pendingSnapshot.reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -329,8 +441,6 @@ void HopScalingModule::rollHour()
 
     if (histogramRollCount < 255)
         histogramRollCount++;
-
-    saveToDisk();
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +521,8 @@ int32_t HopScalingModule::runOnce()
 {
     const bool isFirstRun = !hasCompletedInitialRun;
     bool didHourlyUpdate = false;
+
+    adoptSnapshotIfReady();
 
     // Sampled every tick, not only on a roll, so the gate reacts within minutes of a change.
     updateCongestion();

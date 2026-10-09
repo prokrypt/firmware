@@ -667,14 +667,17 @@ bool GPS::loadProbeCache()
     bytesRead = file.read(reinterpret_cast<uint8_t *>(&record), sizeof(record));
     file.close();
     spiLock->unlock();
+    probeCacheOnFlash = true;
 
     const bool headerValid = (bytesRead == sizeof(record)) && (record.magic == GPS_PROBE_CACHE_MAGIC) &&
                              (record.version == GPS_PROBE_CACHE_VERSION) && (record.reserved == 0U);
     if (!headerValid || !isValidGnssModel(record.model) || !isValidProbeBaud(record.baud)) {
-        clearProbeCache(); // Drop corrupt/invalid cache so next boot can
-                           // recover.
+        // Unreadable: probe in full. It names no hardware, so whatever the probe finds counts as different.
+        forgetProbeCache();
         return false;
     }
+    flashProbeBaud = static_cast<int32_t>(record.baud);
+    flashProbeModel = static_cast<GnssModel_t>(record.model);
 
     cachedProbeBaud = static_cast<int32_t>(record.baud);
     cachedProbeModel = static_cast<GnssModel_t>(record.model);
@@ -687,30 +690,27 @@ bool GPS::loadProbeCache()
 #endif
 }
 
-void GPS::clearProbeCache()
+void GPS::forgetProbeCache()
 {
-    // Invalidate in-memory and on-disk cache so next boot is forced to do a
-    // full probe.
     hasProbeCache = false;
     triedProbeCache = true;
     cachedProbeBaud = 0;
     cachedProbeModel = GNSS_MODEL_UNKNOWN;
-#ifdef FSCom
-    spiLock->lock();
-    if (FSCom.exists(GPS_PROBE_CACHE_FILE) && FlashGuard::noteWrite(GPS_PROBE_CACHE_FILE)) {
-        FSCom.remove(GPS_PROBE_CACHE_FILE);
-    }
-    spiLock->unlock();
-#endif
 }
 
-bool GPS::saveProbeCache() const
+bool GPS::saveProbeCache()
 {
 #ifdef FSCom
     if (gnssModel == GNSS_MODEL_UNKNOWN || !isValidGnssModel(static_cast<uint8_t>(gnssModel)) ||
         !isValidProbeBaud(detectedBaud)) {
         return false;
     }
+    // A cache hit, or a full probe that found the same hardware again: nothing to write.
+    if (probeCacheOnFlash && flashProbeModel == gnssModel && flashProbeBaud == detectedBaud)
+        return true;
+
+    // First probe on this device, or the GPS hardware (or its baud) really changed. Bounded by module swaps.
+    FlashGuard::Scope oneTime(probeCacheOnFlash ? "gps hardware changed" : "gps first probe");
 
     spiLock->lock();
     FSCom.mkdir("/prefs");
@@ -723,7 +723,13 @@ bool GPS::saveProbeCache() const
     spiLock->lock();
     const size_t written = file.write(reinterpret_cast<const uint8_t *>(&record), sizeof(record));
     spiLock->unlock();
-    return (written == sizeof(record)) && file.close();
+    const bool ok = (written == sizeof(record)) && file.close();
+    if (ok) {
+        probeCacheOnFlash = true;
+        flashProbeModel = gnssModel;
+        flashProbeBaud = detectedBaud;
+    }
+    return ok;
 #else
     return false;
 #endif
@@ -838,8 +844,8 @@ bool GPS::verifyCachedProbePresence()
         present = sawNmeaSentenceAtBaud(_serial_gps, 3000);
     }
     if (!present) {
-        LOG_WARN("Cached GPS probe stale (%s @ %d), clearing", cachedProbeModelName, cachedProbeBaud);
-        clearProbeCache();
+        LOG_WARN("Cached GPS probe stale (%s @ %d), probing in full", cachedProbeModelName, cachedProbeBaud);
+        forgetProbeCache();
         return false;
     }
 

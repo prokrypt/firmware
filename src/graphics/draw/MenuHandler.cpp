@@ -2426,7 +2426,6 @@ void menuHandler::rebootMenu()
         if (selected == 1) {
             IF_SCREEN(screen->showSimpleBanner("Rebooting...", 0));
             nodeDB->saveToDisk();
-            messageStore.saveToFlash();
             rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         } else {
             menuQueue = PowerMenu;
