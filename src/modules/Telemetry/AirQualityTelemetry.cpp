@@ -183,6 +183,7 @@ int32_t AirQualityTelemetryModule::runOnce()
             transmitHistory ? transmitHistory->getLastSentToMeshMillis(TX_HISTORY_KEY_AIR_QUALITY_TELEMETRY) : 0;
 
         bool telemetryAllowed =
+            !(transmitHistory && transmitHistory->inBootHoldoff()) &&
             airTime->isTxAllowedChannelUtil(config.device.role != meshtastic_Config_DeviceConfig_Role_SENSOR) &&
             airTime->isTxAllowedAirUtil();
 

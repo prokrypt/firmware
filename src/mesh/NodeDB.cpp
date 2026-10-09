@@ -903,8 +903,7 @@ bool NodeDB::factoryReset(bool eraseBleBonds)
 
     spiLock->unlock();
 
-    // rmDir above nuked the .dat file, but TransmitHistory's in-memory
-    // cache auto-flushes every 5 min and would resurrect it.
+    // Factory reset forgets our broadcast throttle stamps too.
     if (transmitHistory) {
         transmitHistory->clear();
     }

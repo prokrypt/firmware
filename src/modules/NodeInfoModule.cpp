@@ -243,6 +243,9 @@ NodeInfoModule::NodeInfoModule()
 
 int32_t NodeInfoModule::runOnce()
 {
+    // The routine broadcast waits out the boot holdoff; sends a user triggers go through sendOurNodeInfo() directly.
+    if (const uint32_t holdoffMs = transmitHistory ? transmitHistory->bootHoldoffRemainingMs() : 0)
+        return holdoffMs;
     if (airTime->isTxAllowedAirUtil() && config.device.role != meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN) {
         // If we changed channels, ask everyone else for their latest info
         bool requestReplies = currentGeneration != radioGeneration;

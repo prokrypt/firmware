@@ -19,7 +19,7 @@ STATE_MANIFEST_DEFAULT="test/state-manifest.tsv"
 # --write-manifest hint; the scan itself is unfiltered, so a suite writing somewhere unexpected is
 # still caught.
 # shellcheck disable=SC2034 # referenced by callers and by the docs
-STATE_KNOWN_FILES="nodes.proto config.proto channels.proto module.proto device.proto warm.dat transmit_history.dat"
+STATE_KNOWN_FILES="nodes.proto config.proto channels.proto module.proto device.proto warm.dat"
 
 # Guard the guard: refuse to run a suite against a sandbox that is not empty. If isolation ever
 # leaks, the after-diff measures against the wrong baseline and the whole check reports CLEAN while

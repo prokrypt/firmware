@@ -616,6 +616,9 @@ int32_t MeshBeaconBroadcastModule::runOnce()
     const uint32_t intervalMs =
         Default::getConfiguredOrMinimumValue(intervalSecs, default_mesh_beacon_min_broadcast_interval_secs) * 1000;
 
+    if (const uint32_t holdoffMs = transmitHistory ? transmitHistory->bootHoldoffRemainingMs() : 0)
+        return static_cast<int32_t>(holdoffMs);
+
     if ((bcfg.flags & MESH_BEACON_FLAG_BROADCAST_ENABLED) && airTime->isTxAllowedAirUtil() &&
         config.device.role != meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN) {
         // Throttle against the reboot-safe transmit history (mirrors NodeInfoModule): skip if we

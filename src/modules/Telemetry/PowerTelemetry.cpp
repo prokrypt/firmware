@@ -96,7 +96,8 @@ int32_t PowerTelemetryModule::runOnce()
             return disable();
 
         uint32_t lastTelemetry = transmitHistory ? transmitHistory->getLastSentToMeshMillis(TX_HISTORY_KEY_POWER_TELEMETRY) : 0;
-        if (((lastTelemetry == 0) || !Throttle::isWithinTimespanMs(lastTelemetry, sendToMeshIntervalMs)) &&
+        const bool bootHoldoff = transmitHistory && transmitHistory->inBootHoldoff();
+        if (!bootHoldoff && ((lastTelemetry == 0) || !Throttle::isWithinTimespanMs(lastTelemetry, sendToMeshIntervalMs)) &&
             airTime->isTxAllowedAirUtil()) {
             sendTelemetry();
             if (transmitHistory)

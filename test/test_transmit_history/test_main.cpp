@@ -1,6 +1,6 @@
 #include "TestUtil.h"
 #include "TransmitHistory.h"
-#include "gps/RTC.h"
+#include "UptimeClock.h"
 #include <Throttle.h>
 #include <unity.h>
 
@@ -19,7 +19,10 @@ void setUp(void)
     resetTransmitHistory();
 }
 
-void tearDown(void) {}
+void tearDown(void)
+{
+    Time::useRealClock();
+}
 
 static void test_setLastSentToMesh_stores_millis()
 {
@@ -131,172 +134,79 @@ static void test_getInstance_creates_global()
     TEST_ASSERT_NOT_NULL(transmitHistory);
 }
 
-// --- Persistence round-trip (loadFromDisk / saveToDisk) ---
+// --- RAM only ---
 
-static void test_save_and_load_round_trip()
+static void test_stamps_do_not_survive_a_new_instance()
 {
-    // Set some values
+    // A reboot is a fresh instance; nothing is read back from flash, so every key reads as never sent.
     transmitHistory->setLastSentToMesh(meshtastic_PortNum_NODEINFO_APP);
-    testDelay(10);
+    resetTransmitHistory();
+    TEST_ASSERT_EQUAL_UINT32(0, transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_NODEINFO_APP));
+}
+
+static void test_clear_forgets_every_stamp()
+{
+    transmitHistory->setLastSentToMesh(meshtastic_PortNum_NODEINFO_APP);
     transmitHistory->setLastSentToMesh(meshtastic_PortNum_POSITION_APP);
-
-    uint32_t nodeInfoEpoch = transmitHistory->getLastSentToMeshEpoch(meshtastic_PortNum_NODEINFO_APP);
-    uint32_t positionEpoch = transmitHistory->getLastSentToMeshEpoch(meshtastic_PortNum_POSITION_APP);
-
-    // Force save
-    transmitHistory->saveToDisk();
-
-    // Reset and reload
-    delete transmitHistory;
-    transmitHistory = nullptr;
-    transmitHistory = TransmitHistory::getInstance();
-    transmitHistory->loadFromDisk();
-
-    // Epoch values should be restored (if RTC was available when set)
-    uint32_t restoredNodeInfo = transmitHistory->getLastSentToMeshEpoch(meshtastic_PortNum_NODEINFO_APP);
-    uint32_t restoredPosition = transmitHistory->getLastSentToMeshEpoch(meshtastic_PortNum_POSITION_APP);
-
-    TEST_ASSERT_EQUAL_UINT32(nodeInfoEpoch, restoredNodeInfo);
-    TEST_ASSERT_EQUAL_UINT32(positionEpoch, restoredPosition);
-
-    // After loadFromDisk, millis should be seeded (non-zero) for stored entries
-    uint32_t restoredMillis = transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_NODEINFO_APP);
-    if (restoredNodeInfo > 0) {
-        // If epoch was stored (set seconds ago), epoch-conversion gives elapsed ≈ 0 s,
-        // so getLastSentToMeshMillis() should return a non-zero value.
-        TEST_ASSERT_NOT_EQUAL(0, restoredMillis);
-    }
+    transmitHistory->clear();
+    TEST_ASSERT_EQUAL_UINT32(0, transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_NODEINFO_APP));
+    TEST_ASSERT_EQUAL_UINT32(0, transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_POSITION_APP));
 }
 
-// --- Boot without RTC scenario ---
+// --- Boot holdoff ---
+// These drive the injected uptime clock from zero, so a "cold boot" is the clock reset to a known uptime.
 
-// Crash-reboot protection: a send that happened moments before the reboot must still
-// throttle after reload. This works because getLastSentToMeshMillis() reconstructs
-// a millis()-relative timestamp from the stored epoch, and Throttle uses unsigned
-// subtraction so the age survives wraparound even when uptime is near zero.
-static void test_boot_after_recent_send_still_throttles()
+static void bootAt(uint32_t uptimeMs, bool wokeFromDeepSleep)
 {
-    transmitHistory->setLastSentToMesh(meshtastic_PortNum_NODEINFO_APP);
-    transmitHistory->saveToDisk();
-
-    // Simulate reboot
-    delete transmitHistory;
-    transmitHistory = nullptr;
-    transmitHistory = TransmitHistory::getInstance();
-    transmitHistory->loadFromDisk();
-
-    // Epoch was set seconds ago; reconstructed age is still within the 10-min window.
-    uint32_t result = transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_NODEINFO_APP);
-    uint32_t epoch = transmitHistory->getLastSentToMeshEpoch(meshtastic_PortNum_NODEINFO_APP);
-    if (epoch == 0) {
-        TEST_IGNORE_MESSAGE("Epoch not persisted; skipping");
-        return;
-    }
-
-    TEST_ASSERT_NOT_EQUAL(0, result);
-    bool withinInterval = Throttle::isWithinTimespanMs(result, 10 * 60 * 1000);
-    TEST_ASSERT_TRUE(withinInterval);
+    Time::resetMonotonicForTests();
+    Time::setTestMillis(uptimeMs);
+    Time::serviceMonotonic();
+    transmitHistory->setWokeFromDeepSleepForTest(wokeFromDeepSleep);
 }
 
-// Regression test for issue #9901:
-// A device powered off for longer than the throttle window must broadcast NodeInfo
-// on its next boot - it must not be silenced because loadFromDisk() once treated
-// every loaded entry as "just sent" by seeding lastMillis to millis() at boot.
-static void test_boot_after_long_gap_allows_nodeinfo()
+static void test_holdoff_blocks_right_after_a_cold_boot()
 {
-    if (getRTCQuality() <= RTCQualityNone) {
-        TEST_IGNORE_MESSAGE("No RTC available; skipping epoch-dependent test");
-        return;
-    }
-
-    uint32_t now = getTime();
-
-    // Simulate: last NodeInfo sent 30 minutes ago (outside the 10-min throttle window)
-    transmitHistory->setLastSentAtEpoch(meshtastic_PortNum_NODEINFO_APP, now - (30 * 60));
-    transmitHistory->saveToDisk();
-
-    // Simulate reboot
-    delete transmitHistory;
-    transmitHistory = nullptr;
-    transmitHistory = TransmitHistory::getInstance();
-    transmitHistory->loadFromDisk();
-
-    uint32_t restoredEpoch = transmitHistory->getLastSentToMeshEpoch(meshtastic_PortNum_NODEINFO_APP);
-    if (restoredEpoch == 0) {
-        TEST_IGNORE_MESSAGE("Epoch not persisted; skipping");
-        return;
-    }
-
-    uint32_t restoredMs = transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_NODEINFO_APP);
-    bool throttled = (restoredMs != 0) && Throttle::isWithinTimespanMs(restoredMs, 10 * 60 * 1000);
-    TEST_ASSERT_FALSE_MESSAGE(throttled, "NodeInfo must not be throttled after a 30-min gap (#9901)");
+    bootAt(1000, false);
+    TEST_ASSERT_TRUE(transmitHistory->inBootHoldoff());
+    TEST_ASSERT_EQUAL_UINT32(TransmitHistory::BOOT_HOLDOFF_MS - 1000, transmitHistory->bootHoldoffRemainingMs());
 }
 
-// Complementary: a rapid reboot must still throttle (crash-loop protection), even
-// though the reconstructed lastMs may wrap because current uptime is small.
-static void test_boot_within_throttle_window_still_throttles()
+static void test_holdoff_is_five_minutes()
 {
-    if (getRTCQuality() <= RTCQualityNone) {
-        TEST_IGNORE_MESSAGE("No RTC available; skipping epoch-dependent test");
-        return;
-    }
+    TEST_ASSERT_EQUAL_UINT32(5 * 60 * 1000, TransmitHistory::BOOT_HOLDOFF_MS);
 
-    uint32_t now = getTime();
+    bootAt(TransmitHistory::BOOT_HOLDOFF_MS - 1, false);
+    TEST_ASSERT_TRUE(transmitHistory->inBootHoldoff());
+    TEST_ASSERT_EQUAL_UINT32(1, transmitHistory->bootHoldoffRemainingMs());
 
-    // Simulate: last NodeInfo sent 5 minutes ago (inside the 10-min throttle window)
-    transmitHistory->setLastSentAtEpoch(meshtastic_PortNum_NODEINFO_APP, now - (5 * 60));
-    transmitHistory->saveToDisk();
-
-    // Simulate reboot
-    delete transmitHistory;
-    transmitHistory = nullptr;
-    transmitHistory = TransmitHistory::getInstance();
-    transmitHistory->loadFromDisk();
-
-    uint32_t restoredEpoch = transmitHistory->getLastSentToMeshEpoch(meshtastic_PortNum_NODEINFO_APP);
-    if (restoredEpoch == 0) {
-        TEST_IGNORE_MESSAGE("Epoch not persisted; skipping");
-        return;
-    }
-
-    uint32_t restoredMs = transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_NODEINFO_APP);
-    bool throttled = (restoredMs != 0) && Throttle::isWithinTimespanMs(restoredMs, 10 * 60 * 1000);
-    TEST_ASSERT_TRUE_MESSAGE(throttled, "NodeInfo must still be throttled when last send was within the 10-min window");
+    Time::advanceTestMillis(1);
+    Time::serviceMonotonic();
+    TEST_ASSERT_FALSE(transmitHistory->inBootHoldoff());
+    TEST_ASSERT_EQUAL_UINT32(0, transmitHistory->bootHoldoffRemainingMs());
 }
 
-static void test_boot_without_time_source_still_throttles_recent_restart()
+static void test_holdoff_stays_over_for_the_rest_of_the_boot()
 {
-    setBootRelativeTimeForUnitTest(32);
-    transmitHistory->setLastSentAtBootRelative(meshtastic_PortNum_NODEINFO_APP, 32);
-    transmitHistory->saveToDisk();
-
-    delete transmitHistory;
-    transmitHistory = nullptr;
-    transmitHistory = TransmitHistory::getInstance();
-
-    setBootRelativeTimeForUnitTest(31);
-    transmitHistory->loadFromDisk();
-
-    uint32_t restoredMs = transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_NODEINFO_APP);
-    bool throttled = (restoredMs != 0) && Throttle::isWithinTimespanMs(restoredMs, 10 * 60 * 1000);
-    TEST_ASSERT_TRUE_MESSAGE(throttled, "Recent no-RTC reboots should still suppress duplicate NodeInfo");
+    bootAt(TransmitHistory::BOOT_HOLDOFF_MS, false);
+    Time::advanceTestMillis(24UL * 60 * 60 * 1000);
+    Time::serviceMonotonic();
+    TEST_ASSERT_FALSE(transmitHistory->inBootHoldoff());
 }
 
-static void test_boot_without_time_source_expires_boot_relative_history()
+static void test_holdoff_skips_a_wake_from_deep_sleep()
 {
-    setBootRelativeTimeForUnitTest(32);
-    transmitHistory->setLastSentAtBootRelative(meshtastic_PortNum_NODEINFO_APP, 32);
-    transmitHistory->saveToDisk();
+    // A sensor or tracker waking on its timer is its configured duty cycle, not a reboot loop.
+    bootAt(1000, true);
+    TEST_ASSERT_FALSE(transmitHistory->inBootHoldoff());
+    TEST_ASSERT_EQUAL_UINT32(0, transmitHistory->bootHoldoffRemainingMs());
+}
 
-    delete transmitHistory;
-    transmitHistory = nullptr;
-    transmitHistory = TransmitHistory::getInstance();
-
-    setBootRelativeTimeForUnitTest(400);
-    transmitHistory->loadFromDisk();
-
-    uint32_t restoredMs = transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_NODEINFO_APP);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, restoredMs, "Boot-relative history should only suppress near-term restarts");
+static void test_holdoff_leaves_stamps_alone()
+{
+    // The holdoff is a separate gate: a user-triggered send still stamps, and the stamp still throttles.
+    bootAt(1000, false);
+    transmitHistory->setLastSentToMesh(meshtastic_PortNum_POSITION_APP);
+    TEST_ASSERT_EQUAL_UINT32(1000, transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_POSITION_APP));
 }
 
 void setup()
@@ -322,17 +232,16 @@ void setup()
     RUN_TEST(test_getInstance_returns_same_instance);
     RUN_TEST(test_getInstance_creates_global);
 
-    // Persistence
-    RUN_TEST(test_save_and_load_round_trip);
-    RUN_TEST(test_boot_after_recent_send_still_throttles);
+    // RAM only
+    RUN_TEST(test_stamps_do_not_survive_a_new_instance);
+    RUN_TEST(test_clear_forgets_every_stamp);
 
-    // Issue #9901 regression tests
-    RUN_TEST(test_boot_after_long_gap_allows_nodeinfo);
-    RUN_TEST(test_boot_within_throttle_window_still_throttles);
-
-    // No-RTC regression tests
-    RUN_TEST(test_boot_without_time_source_still_throttles_recent_restart);
-    RUN_TEST(test_boot_without_time_source_expires_boot_relative_history);
+    // Boot holdoff (injected clock; keep these last)
+    RUN_TEST(test_holdoff_blocks_right_after_a_cold_boot);
+    RUN_TEST(test_holdoff_is_five_minutes);
+    RUN_TEST(test_holdoff_stays_over_for_the_rest_of_the_boot);
+    RUN_TEST(test_holdoff_skips_a_wake_from_deep_sleep);
+    RUN_TEST(test_holdoff_leaves_stamps_alone);
 
     exit(UNITY_END());
 }

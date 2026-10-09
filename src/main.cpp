@@ -871,8 +871,8 @@ void setup()
     esp32ReleaseBluetoothMemoryIfUnused();
 #endif
 
-    // Initialize transmit history to persist broadcast throttle timers across reboots
-    TransmitHistory::getInstance()->loadFromDisk();
+    // RAM-only broadcast throttle timers; the boot holdoff stands in for persisting them
+    TransmitHistory::getInstance();
 #if HAS_TFT
     if (config.display.displaymode == meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
         tftSetup();
@@ -1202,7 +1202,7 @@ void setup()
 
 #ifndef ARCH_PORTDUINO
 
-    // Initialize Wifi
+        // Initialize Wifi
 #if HAS_WIFI
     initWifi();
 #endif

@@ -9,7 +9,6 @@
 #include "MeshService.h"
 #include "NodeDB.h"
 #include "PowerMon.h"
-#include "TransmitHistory.h"
 #include "detect/LoRaRadioType.h"
 #include "error.h"
 #include "main.h"
@@ -252,13 +251,8 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
     if (screen)
         screen->doDeepSleep(); // datasheet says this will draw only 10ua
 
-    if (!skipSaveNodeDb) {
-        nodeDB->saveToDisk();
-    }
-
-    // Persist broadcast transmit times so throttle survives reboot
-    if (transmitHistory)
-        transmitHistory->saveToDisk();
+    // Going to sleep is not a reason to write flash: every user change was saved when it was made.
+    (void)skipSaveNodeDb;
 
 #ifdef PIN_POWER_EN
     digitalWrite(PIN_POWER_EN, LOW);

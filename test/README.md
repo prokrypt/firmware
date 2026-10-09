@@ -338,7 +338,6 @@ Each suite runs inside its own scratch `$HOME` (`bin/pio-test-isolate.sh`), so s
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `nodes.proto`                                                    | any user-initiated `NodeDB` save (`set_favorite()`, `removeNodeByNum()`, `resetNodes()`, admin handlers) - boot never writes it |
 | `config.proto`, `module.proto`, `channels.proto`, `device.proto` | config/channel saves, admin handlers                                                                                                                           |
-| `transmit_history.dat`                                           | retransmission tracking                                                                                                                                        |
 | `/prefs/<module>.bin`                                            | per-module `saveState()`                                                                                                                                       |
 
 `NodeDB`'s constructor calls `loadFromDisk()`, so **any** suite that constructs one inherits whatever is there.

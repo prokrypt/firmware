@@ -417,8 +417,8 @@ int32_t EnvironmentTelemetryModule::runOnce()
                 result = ina3221Sensor.runOnce();
             if (max17048Sensor.hasSensor())
                 result = max17048Sensor.runOnce();
-            // this only works on the wismesh hub with the solar option. This is not an I2C sensor, so we don't need the
-            // sensormap here.
+                // this only works on the wismesh hub with the solar option. This is not an I2C sensor, so we don't need the
+                // sensormap here.
 #ifdef HAS_RAKPROT
             if (rak9154Sensor.hasSensor())
                 result = rak9154Sensor.runOnce();
@@ -451,7 +451,9 @@ int32_t EnvironmentTelemetryModule::runOnce()
 
         uint32_t lastTelemetry =
             transmitHistory ? transmitHistory->getLastSentToMeshMillis(TX_HISTORY_KEY_ENVIRONMENT_TELEMETRY) : 0;
-        if (((lastTelemetry == 0) || immediateSendRequested ||
+        const bool bootHoldoff = transmitHistory && transmitHistory->inBootHoldoff();
+        if (!bootHoldoff &&
+            ((lastTelemetry == 0) || immediateSendRequested ||
              !Throttle::isWithinTimespanMs(
                  lastTelemetry, Default::getConfiguredOrDefaultMsScaled(moduleConfig.telemetry.environment_update_interval,
                                                                         default_telemetry_broadcast_interval_secs, numOnlineNodes,

@@ -31,16 +31,6 @@ PositionModule::PositionModule()
     isPromiscuous = true; // We always want to update our nodedb, even if we are sniffing on others
     nodeStatusObserver.observe(&nodeStatus->onNewStatus);
 
-    // Seed throttle timer from persisted transmit history so we don't re-broadcast immediately after reboot
-    if (transmitHistory) {
-        uint32_t restored = transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_POSITION_APP);
-        if (restored != 0) {
-            // unset-sentinel-ok: the enclosing restored != 0 already rules out the unset value
-            lastGpsSend = restored;
-            LOG_INFO("Position: restored lastGpsSend from transmit history");
-        }
-    }
-
     if (config.device.role != meshtastic_Config_DeviceConfig_Role_TRACKER &&
         config.device.role != meshtastic_Config_DeviceConfig_Role_TAK_TRACKER) {
         setIntervalFromNow(setStartDelay());
@@ -570,6 +560,10 @@ int32_t PositionModule::runOnce()
         lastPhoneSendMs = now;
     }
 
+    // Periodic and smart broadcasts wait out the boot holdoff; a position the user asks for doesn't come through here.
+    if (transmitHistory && transmitHistory->inBootHoldoff())
+        return RUNONCE_INTERVAL;
+
     // We limit our GPS broadcasts to a max rate
     uint32_t intervalMs = Default::getConfiguredOrDefaultMsScaled(
         config.position.position_broadcast_secs, default_broadcast_interval_secs, numOnlineNodes, TrafficType::POSITION);
@@ -703,6 +697,9 @@ struct SmartPosition PositionModule::getDistanceTraveledSinceLastSend(meshtastic
 
 void PositionModule::trySmartBroadcast(const meshtastic_PositionLite &selfPos, uint32_t nowMs)
 {
+    if (transmitHistory && transmitHistory->inBootHoldoff())
+        return;
+
     auto smartPosition = getDistanceTraveledSinceLastSend(selfPos);
     if (!smartPosition.hasTraveledOverThreshold)
         return;

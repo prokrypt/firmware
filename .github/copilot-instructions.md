@@ -829,7 +829,7 @@ Quick entry point for new test modules: `test/README.md` (native unit-test autho
 
 Each suite runs inside its own scratch `$HOME` (`bin/pio-test-isolate.sh`, wired in per env as `test_testing_command`, so a bare `pio test` and CI get it too). **State never crosses a suite boundary.** Mutation _inside_ a suite is free; carrying state _out_ of one is impossible by construction, not by policy.
 
-The state in question lives in `~/.portduino/default/prefs/` - `nodes.proto`, `config.proto`, `channels.proto`, `module.proto`, `device.proto`, `warm.dat`, `transmit_history.dat`. `NodeDB`'s constructor calls `loadFromDisk()`, so any suite that constructs one reads it, and several `NodeDB` paths (`removeNodeByNum()`, `resetNodes()`, `nodeDBSelfCare()`, and the constructor when the file is absent) write it without being asked.
+The state in question lives in `~/.portduino/default/prefs/` - `nodes.proto`, `config.proto`, `channels.proto`, `module.proto`, `device.proto`, `warm.dat`. `NodeDB`'s constructor calls `loadFromDisk()`, so any suite that constructs one reads it, and several `NodeDB` paths (`removeNodeByNum()`, `resetNodes()`, `nodeDBSelfCare()`, and the constructor when the file is absent) write it without being asked.
 
 Two orthogonal axes: **PASS/FAIL x CLEAN/DIRTY**.
 
