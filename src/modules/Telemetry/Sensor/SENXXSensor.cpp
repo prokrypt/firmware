@@ -8,6 +8,8 @@
 #include "SPILock.h"
 #include "SafeFile.h"
 #include "TelemetrySensor.h"
+#include "UptimeClock.h"
+#include "sleep.h"
 #include <float.h> // FLT_MAX
 #include <pb_decode.h>
 #include <pb_encode.h>
@@ -323,8 +325,8 @@ bool SENXXSensor::idle(bool checkState)
                 return true;
             }
         }
-        // Save state and prefs (on all models)
-        saveState();
+        // Carry the state across a deep sleep; flash only gets it on a user shutdown/reboot.
+        carryState();
     }
 
     if (!oneShotMode) {
@@ -569,6 +571,49 @@ bool SENXXSensor::saveState()
 #endif
 }
 
+namespace
+{
+struct SENXXCarriedState {
+    uint32_t magic;
+    uint32_t lastCleaning;
+    uint32_t vocTime;
+    uint8_t vocState[SENXX_VOC_STATE_BUFFER_SIZE];
+    bool lastCleaningValid;
+    bool vocValid;
+    bool oneShotMode;
+};
+constexpr uint32_t SENXX_CARRY_MAGIC = 0x53454e43; // 'SENC'
+// Survives an ESP32 deep sleep (plain RAM elsewhere). One slot: a second SEN5x/6x would share it.
+RTC_DATA_ATTR SENXXCarriedState rtcCarriedState;
+} // namespace
+
+void SENXXSensor::carryState()
+{
+    rtcCarriedState.lastCleaning = lastCleaning;
+    rtcCarriedState.lastCleaningValid = lastCleaningValid;
+    rtcCarriedState.vocTime = vocTime;
+    rtcCarriedState.vocValid = vocValid;
+    memcpy(rtcCarriedState.vocState, vocState, sizeof(vocState));
+    rtcCarriedState.oneShotMode = oneShotMode;
+    rtcCarriedState.magic = SENXX_CARRY_MAGIC;
+}
+
+bool SENXXSensor::restoreCarriedState()
+{
+    if (!wokeFromDeepSleep() || rtcCarriedState.magic != SENXX_CARRY_MAGIC)
+        return false;
+    lastCleaning = rtcCarriedState.lastCleaning;
+    lastCleaningValid = rtcCarriedState.lastCleaningValid;
+    oneShotMode = rtcCarriedState.oneShotMode;
+    if (hasVOC) {
+        vocTime = rtcCarriedState.vocTime;
+        vocValid = rtcCarriedState.vocValid;
+        memcpy(vocState, rtcCarriedState.vocState, sizeof(vocState));
+    }
+    LOG_INFO("%s: state carried across deep sleep", sensorName);
+    return true;
+}
+
 bool SENXXSensor::isActive()
 {
     // SENXX_CLEANING counts as active so the scheduler polls pendingForReadyMs()
@@ -587,24 +632,24 @@ bool SENXXSensor::checkRTCQualityImproved()
     return gainedUsableClock;
 }
 
+bool SENXXSensor::cleaningDue(uint32_t now)
+{
+    if (cleanedThisBoot)
+        return Time::getUptimeSecs() - cleanedAtUptimeSecs > ONE_WEEK_IN_SECONDS;
+    if (lastCleaningValid && now > SENXX_VOC_VALID_DATE) // valid date: later than 01/01/2018
+        return now >= lastCleaning && now - lastCleaning > ONE_WEEK_IN_SECONDS;
+    return false;
+}
+
 void SENXXSensor::reconcileTimeDependentState(uint32_t now)
 {
-    if (lastCleaningValid) {
-        int32_t passed = now - lastCleaning; // in seconds
-
-        if (passed > ONE_WEEK_IN_SECONDS && (now > SENXX_VOC_VALID_DATE)) {
-            // If current date greater than 01/01/2018 (validity check)
-            startCleaning();
-        }
-    } else {
-        // We assume the device has just been updated or it is new,
-        // so no need to trigger a cleaning.
-        // Just save the timestamp to do a cleaning one week from now.
-        // Otherwise, we will never trigger cleaning in some cases
-        lastCleaning = now;
+    if (cleanedThisBoot && now > SENXX_VOC_VALID_DATE) {
+        // A boot-time cleaning ran before the clock was known: date it now, for the next user save.
+        lastCleaning = now - (Time::getUptimeSecs() - cleanedAtUptimeSecs);
         lastCleaningValid = true;
-        saveState();
     }
+    if (state != SENXX_CLEANING && cleaningDue(now))
+        startCleaning();
 
     // Restore the saved VOC state only if it is valid and recent
     if (hasVOC && vocValid && vocStateRecent(now)) {
@@ -640,6 +685,10 @@ uint32_t SENXXSensor::wakeUpInternal()
         }
     }
 
+    // Weekly cleaning, checked on every wake: by uptime when it last ran this boot, else by the clock.
+    if (state != SENXX_CLEANING && cleaningDue(getValidTime(RTCQuality::RTCQualityDevice)) && startCleaning())
+        return SENXX_CLEANING_DURATION_MS;
+
     if (!sendCommand(SENXX_START_MEASUREMENT)) {
         LOG_ERROR("%s: Error starting measurement", sensorName);
         // TODO - what should this return?? Something actually on the default interval?
@@ -660,8 +709,6 @@ bool SENXXSensor::vocStateStable()
 
 bool SENXXSensor::startCleaning()
 {
-    // Note: we only should enter here if we have a valid RTC with at least
-    // RTCQuality::RTCQualityDevice
     SENXXState previousState = state;
     state = SENXX_CLEANING;
 
@@ -691,14 +738,16 @@ bool SENXXSensor::startCleaning()
 
 void SENXXSensor::finishCleaning()
 {
-    // Save timestamp in flash so we know when a week has passed
-    uint32_t now;
-    now = getValidTime(RTCQuality::RTCQualityDevice);
-    if (now) {
+    // RAM only: uptime times the next weekly run; the wall-clock date (when known) reaches flash at the next
+    // user shutdown/reboot and decides whether the next cold boot needs to clean.
+    cleanedThisBoot = true;
+    cleanedAtUptimeSecs = Time::getUptimeSecs();
+    const uint32_t now = getValidTime(RTCQuality::RTCQualityDevice);
+    if (now > SENXX_VOC_VALID_DATE) {
         lastCleaning = now;
         lastCleaningValid = true;
-        saveState();
     }
+    carryState();
 
     idle();
 }
@@ -741,8 +790,11 @@ bool SENXXSensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
     state = SENXX_IDLE;
     status = 1;
 
-    // Load state
-    loadState();
+    // Load state: carried across a deep sleep if we just woke from one, else the user's last save
+    const bool carried = restoreCarriedState();
+    if (!carried)
+        loadState();
+    userPowerOffObserver.observe(&notifyUserPowerOff);
 
     // Check if it is time to do a cleaning / whether the saved VOC state is still usable.
     // This needs a real clock; if we don't have one yet (typical right after boot, before
@@ -751,6 +803,14 @@ bool SENXXSensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
     // will run this same reconciliation the moment a valid time becomes available.
     lastRTCQuality = getRTCQuality();
     uint32_t now = getValidTime(RTCQuality::RTCQualityDevice);
+    // Cold boot: clean now unless the clock proves the last cleaning was within a week. No record to write -
+    // the fan just runs ~10 s after a cold boot. A deep-sleep wake carries its record and skips this.
+    const bool knownRecent =
+        lastCleaningValid && now > SENXX_VOC_VALID_DATE && now >= lastCleaning && now - lastCleaning <= ONE_WEEK_IN_SECONDS;
+    if (!carried && !knownRecent) {
+        LOG_INFO("%s: no recent cleaning on record, cleaning at boot", sensorName);
+        startCleaning();
+    }
     if (now) {
         reconcileTimeDependentState(now);
     }
@@ -1398,6 +1458,7 @@ void SENXXSensor::setMode(bool setOneShot)
 {
     oneShotMode = setOneShot;
     LOG_INFO("%s: %s mode", sensorName, oneShotMode ? "One shot" : "Continuous");
+    saveState(); // the user's setting (admin): save it now
 }
 
 AdminMessageHandleResult SENXXSensor::handleAdminMessage(const meshtastic_MeshPacket &mp, meshtastic_AdminMessage *request,

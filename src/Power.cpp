@@ -895,6 +895,7 @@ static uint32_t userRebootAtMsec = 0;
 static void saveForUserPowerOff()
 {
     FlashGuard::Scope userWrite("user shutdown/reboot");
+    notifyUserPowerOff.notifyObservers(NULL); // sensors bank their calibration
 #if HAS_SCREEN
     messageStore.saveToFlash();
 #endif

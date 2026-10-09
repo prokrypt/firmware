@@ -50,6 +50,13 @@ extern Observable<void *> notifyDeepSleep;
 /// Called to tell observers we are rebooting ASAP.  Must return 0
 extern Observable<void *> notifyReboot;
 
+/// Called on the user's own shutdown or reboot, inside a FlashGuard user scope: the one time state the firmware
+/// gathered on its own may be written to flash.  Must return 0
+extern Observable<void *> notifyUserPowerOff;
+
+/// True when this boot is a wake from deep sleep (ESP32 only), so RTC_DATA_ATTR state carried across it is valid.
+bool wokeFromDeepSleep();
+
 #ifdef ARCH_ESP32
 /// Called to tell observers that light sleep is about to begin
 extern Observable<void *> notifyLightSleep;

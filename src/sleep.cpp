@@ -53,6 +53,18 @@ Observable<void *> notifyDeepSleep;
 /// Called to tell observers we are rebooting ASAP.  Must return 0
 Observable<void *> notifyReboot;
 
+/// Called on the user's own shutdown or reboot.  Must return 0
+Observable<void *> notifyUserPowerOff;
+
+bool wokeFromDeepSleep()
+{
+#ifdef ARCH_ESP32
+    return wakeCause != ESP_SLEEP_WAKEUP_UNDEFINED;
+#else
+    return false;
+#endif
+}
+
 #ifdef ARCH_ESP32
 /// Called to tell observers that light sleep is about to begin
 Observable<void *> notifyLightSleep;

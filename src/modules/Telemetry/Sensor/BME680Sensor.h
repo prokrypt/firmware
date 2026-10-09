@@ -4,6 +4,7 @@
 
 #include "../mesh/generated/meshtastic/telemetry.pb.h"
 #include "BME680IaqEstimator.h"
+#include "Observer.h"
 #include "TelemetrySensor.h"
 
 #include <Adafruit_BME680.h>
@@ -27,11 +28,7 @@ class BME680Sensor : public TelemetrySensor
     // A heater-unstable cycle reports gas_resistance 0; carry the previous IAQ
     // through such blips, but not forever
     static constexpr uint32_t IAQ_CARRY_MS = 10 * 60 * 1000;
-    static constexpr uint32_t STATE_SAVE_PERIOD_MS = 6 * 60 * 60 * 1000;
-    static constexpr uint32_t STATE_SAVE_PERIOD_SECS = STATE_SAVE_PERIOD_MS / 1000;
-
     static constexpr const char *stateFileName = "/prefs/bme680.dat";
-    static constexpr const char *legacyBsecStateFileName = "/prefs/bsec.dat"; // left behind by pre-open-IAQ firmware
 
     // Async sampling state (driven from runOnce)
     bool readingInFlight = false;
@@ -48,18 +45,14 @@ class BME680Sensor : public TelemetrySensor
     bool lastIaqValid = false;
     uint32_t lastIaqMs = 0;
 
-    // Persistence bookkeeping: burn-in progress is saved whenever it advances
-    // (bounded to ~33 writes lifetime), steady-state saves are RTC-gated so a
-    // deep-sleeping node doesn't rewrite flash on every wake
-    uint32_t lastPersistedSampleCount = UINT32_MAX;
-    uint32_t lastPersistedWarmup = UINT32_MAX;
-    uint32_t lastSaveEpochSecs = 0;
-    uint32_t lastStateSaveMs = 0;
-
     void captureSample();
+    // The baseline is written to flash only on the user's shutdown or reboot. Every sample also copies it to
+    // RTC memory, so an ESP32 deep-sleeping between samples keeps its burn-in without writing flash.
     void loadState();
-    void maybeSaveState();
-    void saveState();
+    void carryState();
+    int saveState(void *unused = nullptr);
+    CallbackObserver<BME680Sensor, void *> userPowerOffObserver =
+        CallbackObserver<BME680Sensor, void *>(this, &BME680Sensor::saveState);
 
   public:
     BME680Sensor();

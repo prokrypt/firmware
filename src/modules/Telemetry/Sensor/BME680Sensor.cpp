@@ -11,8 +11,12 @@
 #include "UptimeClock.h"
 #include "gps/RTC.h"
 #include "mesh/Throttle.h"
+#include "sleep.h"
 
 #include <math.h>
+
+// Survives an ESP32 deep sleep (plain RAM elsewhere). One slot: a second BME680 would share it.
+RTC_DATA_ATTR static BME680IaqState rtcCarriedState;
 
 BME680Sensor::BME680Sensor() : TelemetrySensor(meshtastic_TelemetrySensorType_BME680, "BME680") {}
 
@@ -37,6 +41,7 @@ bool BME680Sensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
 
     status = 1;
     loadState();
+    userPowerOffObserver.observe(&notifyUserPowerOff);
     LOG_INFO("Init sensor: %s (open IAQ estimator)", sensorName);
 
     initI2CSensor();
@@ -103,7 +108,7 @@ void BME680Sensor::captureSample()
         lastIaqValid = false;
     }
 
-    maybeSaveState();
+    carryState();
 }
 
 bool BME680Sensor::getMetrics(meshtastic_Telemetry *measurement)
@@ -140,6 +145,11 @@ bool BME680Sensor::getMetrics(meshtastic_Telemetry *measurement)
 
 void BME680Sensor::loadState()
 {
+    const uint32_t now = getValidTime(RTCQuality::RTCQualityDevice);
+    if (wokeFromDeepSleep() && iaqEstimator.restore(rtcCarriedState, now)) {
+        LOG_INFO("%s IAQ state carried across deep sleep (%u samples)", sensorName, iaqEstimator.samplesFed());
+        return;
+    }
 #ifdef FSCom
     BME680IaqState state;
     bool haveBlob = false;
@@ -150,19 +160,13 @@ void BME680Sensor::loadState()
         haveBlob = file.read((uint8_t *)&state, sizeof(state)) == sizeof(state);
         file.close();
     }
-    // One-time cleanup of the proprietary-BSEC calibration blob from older firmware
-    if (FSCom.exists(legacyBsecStateFileName) && FSCom.remove(legacyBsecStateFileName))
-        LOG_INFO("%s removed legacy state file %s", sensorName, legacyBsecStateFileName);
     spiLock->unlock();
 
     if (!haveBlob) {
         LOG_INFO("No %s state found (File: %s)", sensorName, stateFileName);
         return;
     }
-    if (iaqEstimator.restore(state, getValidTime(RTCQuality::RTCQualityDevice))) {
-        lastPersistedSampleCount = iaqEstimator.samplesFed();
-        lastPersistedWarmup = iaqEstimator.warmupLeft();
-        lastSaveEpochSecs = state.savedAtSecs;
+    if (iaqEstimator.restore(state, now)) {
         LOG_INFO("%s IAQ state restored from %s (%u samples)", sensorName, stateFileName, iaqEstimator.samplesFed());
     } else {
         LOG_INFO("%s IAQ state in %s rejected (stale or invalid), starting fresh", sensorName, stateFileName);
@@ -172,60 +176,29 @@ void BME680Sensor::loadState()
 #endif
 }
 
-void BME680Sensor::maybeSaveState()
+void BME680Sensor::carryState()
 {
-    if (!iaqEstimator.ready()) {
-        // Persist warm-up/burn-in progress whenever it advances, so a
-        // deep-sleeping SENSOR node (one sample per wake, RAM wiped between)
-        // still converges. Bounded to ~33 writes over the sensor's lifetime.
-        if (iaqEstimator.samplesFed() != lastPersistedSampleCount || iaqEstimator.warmupLeft() != lastPersistedWarmup)
-            saveState();
-        return;
-    }
-
-    uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice);
-    if (nowSecs != 0 && lastSaveEpochSecs != 0) {
-        // RTC available: gate on wall-clock age so short deep-sleep wakes don't
-        // rewrite flash every time
-        if (nowSecs >= lastSaveEpochSecs && (nowSecs - lastSaveEpochSecs) < STATE_SAVE_PERIOD_SECS)
-            return;
-    } else {
-        // No RTC: gate on the persisted sample count (it survives reboots, so
-        // deep-sleeping RTC-less nodes still refresh their baseline every
-        // ~STATE_SAVE_PERIOD_MS worth of samples) with an uptime cadence as a
-        // secondary trigger for always-on nodes
-        if (iaqEstimator.samplesFed() - lastPersistedSampleCount < STATE_SAVE_PERIOD_MS / SAMPLE_INTERVAL_MS &&
-            !Throttle::hasElapsed(lastStateSaveMs, STATE_SAVE_PERIOD_MS))
-            return;
-    }
-    saveState();
+    iaqEstimator.serialize(&rtcCarriedState, getValidTime(RTCQuality::RTCQualityDevice));
 }
 
-void BME680Sensor::saveState()
+int BME680Sensor::saveState(void *)
 {
 #ifdef FSCom
     BME680IaqState state;
-    uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice);
-    iaqEstimator.serialize(&state, nowSecs);
+    iaqEstimator.serialize(&state, getValidTime(RTCQuality::RTCQualityDevice));
 
-    // SafeFile takes the SPI lock itself; fullAtomic keeps the old state file
-    // in place until the verified replacement is renamed over it, so a power
-    // loss mid-save can't lose the banked burn-in progress (the blob is 24
-    // bytes, so the atomic path costs nothing)
+    // fullAtomic keeps the old file until the verified replacement is renamed over it, so a power loss
+    // mid-save can't lose the banked baseline (the blob is 24 bytes, so the atomic path costs nothing)
     auto file = SafeFile(stateFileName, true);
     file.write((uint8_t *)&state, sizeof(state));
-    if (file.close()) {
-        lastPersistedSampleCount = iaqEstimator.samplesFed();
-        lastPersistedWarmup = iaqEstimator.warmupLeft();
-        lastSaveEpochSecs = nowSecs;
-        lastStateSaveMs = Time::getMillis();
+    if (file.close())
         LOG_DEBUG("%s state write to %s", sensorName, stateFileName);
-    } else {
+    else
         LOG_WARN("Can't write %s state (File: %s)", sensorName, stateFileName);
-    }
 #else
     LOG_ERROR("Filesystem not implemented");
 #endif
+    return 0;
 }
 
 #endif

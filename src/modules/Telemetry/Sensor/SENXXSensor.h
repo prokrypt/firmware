@@ -6,6 +6,7 @@
 #include "../detect/ReClockI2C.h"
 #include "../mesh/generated/meshtastic/telemetry.pb.h"
 #include "CO2Sensor.h"
+#include "Observer.h"
 #include "TelemetrySensor.h"
 #include "Wire.h"
 #include "gps/RTC.h"
@@ -279,12 +280,28 @@ class SENXXSensor : public TelemetrySensor, public CO2CalibrationSensor
     meshtastic_SEN5XState sen5xstate = meshtastic_SEN5XState_init_zero;
     meshtastic_SEN6XState sen6xstate = meshtastic_SEN6XState_init_zero;
 
+    // Flash holds the user's mode and the last cleaning / VOC state, written only on the user's shutdown or
+    // reboot (and when the user changes the mode). Every idle also copies the state to RTC memory, so an ESP32
+    // deep-sleeping between measurements carries it across the sleep without writing flash.
     bool loadState();
     bool saveState();
+    void carryState();
+    bool restoreCarriedState();
+    int onUserPowerOff(void *)
+    {
+        saveState();
+        return 0;
+    }
+    CallbackObserver<SENXXSensor, void *> userPowerOffObserver =
+        CallbackObserver<SENXXSensor, void *>(this, &SENXXSensor::onUserPowerOff);
 
-    // Cleaning State
+    // Cleaning State. lastCleaning is wall-clock and may be unknown; cleanedThisBoot/cleanedAtUptimeSecs track a
+    // cleaning run since boot by uptime, so the weekly cycle needs no clock and no flash.
     uint32_t lastCleaning = 0;
     bool lastCleaningValid = false;
+    bool cleanedThisBoot = false;
+    uint32_t cleanedAtUptimeSecs = 0;
+    bool cleaningDue(uint32_t now);
 
     // VOC State
     uint8_t vocState[SENXX_VOC_STATE_BUFFER_SIZE]{};
