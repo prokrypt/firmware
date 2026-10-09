@@ -483,6 +483,8 @@ NodeDB::NodeDB()
     // Boot fix-ups below apply in RAM only. The single sanctioned boot write is a newly minted
     // (or restored) identity keypair, which would otherwise change our NodeNum on every boot.
     const meshtastic_Config_SecurityConfig_private_key_t keyAtLoad = config.security.private_key;
+    // my_node_num lives in devicestate; createNewIdentity() moves it whenever the key changes.
+    const NodeNum nodeNumAtLoad = myNodeInfo.my_node_num;
     // Re-read the device id from silicon each boot via the per-arch getDeviceId(); clear the
     // disk-loaded value first so a failed/empty derivation leaves it unset rather than stale.
     myNodeInfo.device_id.size = 0;
@@ -538,6 +540,10 @@ NodeDB::NodeDB()
 #endif
     const bool identityMinted = !configDecodeFailed && config.security.private_key.size == 32 &&
                                 (keyAtLoad.size != 32 || memcmp(keyAtLoad.bytes, config.security.private_key.bytes, 32) != 0);
+    // The node num followed the key (crc32 of the public key) away from what devicestate holds. Also true for a
+    // device an earlier build left with the key saved but not the number: persisting it here heals that once.
+    const bool nodeNumMoved =
+        !configDecodeFailed && config.security.public_key.size == 32 && myNodeInfo.my_node_num != nodeNumAtLoad;
 
     // Identity is now established, so run the self-care pass on the store
     // loadFromDisk() deliberately left untrimmed: confirm self, trim/demote only
@@ -697,9 +703,11 @@ NodeDB::NodeDB()
     // resetRadioConfig() above loaded config and channels, so this records the slot we booted on.
     refreshCommittedLoraSlot();
     bootInitializationInProgress = false;
-    if (identityMinted || identityRestorePending) {
+    if (identityMinted || identityRestorePending || nodeNumMoved) {
+        // Key, node num and our own node entry must land together (as AdminModule does when a region set mints
+        // the key): with only the key saved, every boot moves the num again and clients keep the stale one.
         FlashGuard::Scope oneTime("identity keypair");
-        saveToDisk(SEGMENT_CONFIG);
+        saveToDisk(SEGMENT_CONFIG | SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE);
         identityRestorePending = false;
     }
 }
