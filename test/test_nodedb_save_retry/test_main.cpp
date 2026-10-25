@@ -19,6 +19,12 @@
 // the gate-driven cases are compiled out there and only the rename case runs. The unreadable-filesystem
 // branch cannot be reached in a native test: on portduino a FLASH_CORRUPTION critical error exits the
 // process, which is exactly the outcome the assertions here prove is not taken.
+//
+// Upstream #11930 added a deferred node save (main-loop retry + reboot observer) so peers heard over
+// the air reach nodes.proto. This fork keeps nodes.proto to self + favorites and writes it only on a
+// user action, so the cases below pin the opposite contract: a peer learned from traffic is never
+// written, not later and not at reboot. The regression guarded: an upstream merge bringing back an
+// automatic node save.
 #include "MeshTypes.h" // Include BEFORE TestUtil.h
 #include "TestUtil.h"
 #include <unity.h>
@@ -33,8 +39,10 @@
 
 #if defined(FSCom)
 
+#include "UptimeClock.h" // test clock
 #include "mesh/NodeDB.h"
 #include "power/PowerHAL.h"
+#include "sleep.h" // notifyReboot
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -101,6 +109,34 @@ uint64_t fileFingerprint(const char *path)
 void bumpConfig()
 {
     config.device.node_info_broadcast_secs += 1;
+}
+
+// Read nodes.proto back from flash and report whether it holds this node, and under which name.
+bool persistedNodeName(NodeNum num, std::string &longName)
+{
+    meshtastic_NodeDatabase reloaded{};
+    if (nodeDB->loadProto(nodeDatabaseFileName, nodeDB->getMaxNodesAllocatedSize(), sizeof(meshtastic_NodeDatabase),
+                          &meshtastic_NodeDatabase_msg, &reloaded) != LoadFileResult::LOAD_SUCCESS)
+        return false;
+    for (const auto &n : reloaded.nodes) {
+        if (n.num == num) {
+            longName = n.long_name;
+            return true;
+        }
+    }
+    return false;
+}
+
+// A peer heard for the first time, with a key so updateUser() takes the normal path.
+meshtastic_User makePeer(const char *longName)
+{
+    meshtastic_User u = meshtastic_User_init_zero;
+    strncpy(u.long_name, longName, sizeof(u.long_name) - 1);
+    strncpy(u.short_name, "PR", sizeof(u.short_name) - 1);
+    u.public_key.size = 32;
+    memset(u.public_key.bytes, 0x5A, 32);
+    u.public_key.bytes[0] = 0x01;
+    return u;
 }
 
 // PortduinoFS::rmdir() is unlink() underneath and cannot remove a directory, so go to the host.
@@ -224,12 +260,50 @@ static void test_saveToDisk_railUnsafeAtEntry_returnsFalseImmediately(void)
 }
 #endif // !_WIN32
 
+// --- No automatic node database save --------------------------------------------------------------
+
+// A peer heard over the air lives in RAM only, however much time passes.
+static void test_updateUser_heardPeer_isNeverPersisted(void)
+{
+    TEST_MESSAGE("=== updateUser: a peer heard over the air is not written to nodes.proto ===");
+    constexpr NodeNum kPeer = 0xE1000101;
+    Time::setTestMillis(30 * 60 * 1000);
+
+    meshtastic_User u = makePeer("Bob");
+    TEST_ASSERT_TRUE(nodeDB->updateUser(kPeer, u));
+
+    std::string name;
+    TEST_ASSERT_FALSE(persistedNodeName(kPeer, name));
+
+    Time::advanceTestMillis(10 * 60 * 1000);
+    TEST_ASSERT_FALSE(persistedNodeName(kPeer, name));
+}
+
+// A reboot (automatic or not) is not a save point for the node database.
+static void test_reboot_doesNotPersistHeardPeer(void)
+{
+    TEST_MESSAGE("=== reboot: a peer heard just before it is not written to nodes.proto ===");
+    constexpr NodeNum kPeer = 0xE1000102;
+    Time::setTestMillis(40 * 60 * 1000);
+
+    meshtastic_User u = makePeer("Carol");
+    TEST_ASSERT_TRUE(nodeDB->updateUser(kPeer, u));
+
+    notifyReboot.notifyObservers(NULL);
+
+    std::string name;
+    TEST_ASSERT_FALSE(persistedNodeName(kPeer, name));
+}
+
 void setUp(void)
 {
     scriptRail({});
 }
 
-void tearDown(void) {}
+void tearDown(void)
+{
+    Time::useRealClock();
+}
 
 NSR_TEST_ENTRY void setup()
 {
@@ -248,6 +322,10 @@ NSR_TEST_ENTRY void setup()
     RUN_TEST(test_saveToDisk_writeFailsButFsReadable_doesNotFormat);
     RUN_TEST(test_saveToDisk_railUnsafeAtEntry_returnsFalseImmediately);
 #endif
+
+    printf("\n=== no automatic node database save ===\n");
+    RUN_TEST(test_updateUser_heardPeer_isNeverPersisted);
+    RUN_TEST(test_reboot_doesNotPersistHeardPeer);
 
     exit(UNITY_END());
 }
