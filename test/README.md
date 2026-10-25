@@ -124,7 +124,7 @@ The native build requires several system libraries. Install them all at once:
 ```bash
 sudo apt-get install -y \
   libbluetooth-dev libgpiod-dev libyaml-cpp-dev libjsoncpp-dev openssl libssl-dev \
-  libulfius-dev liborcania-dev libusb-1.0-0-dev libi2c-dev libuv1-dev
+  libulfius-dev liborcania-dev libusb-1.0-0-dev libi2c-dev libuv1-dev libavahi-client-dev
 ```
 
 See `.github/actions/setup-native/action.yml` for the canonical list.
@@ -334,11 +334,11 @@ void test_something() {
 
 Each suite runs inside its own scratch `$HOME` (`bin/pio-test-isolate.sh`), so state cannot reach the next suite. The files in play are wider than module state, and all but the last live under `~/.portduino/default/prefs/`:
 
-| File                                                             | Written by                                                                                                                                                     |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File                                                             | Written by                                                                                                                      |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `nodes.proto`                                                    | any user-initiated `NodeDB` save (`set_favorite()`, `removeNodeByNum()`, `resetNodes()`, admin handlers) - boot never writes it |
-| `config.proto`, `module.proto`, `channels.proto`, `device.proto` | config/channel saves, admin handlers                                                                                                                           |
-| `/prefs/<module>.bin`                                            | per-module `saveState()`                                                                                                                                       |
+| `config.proto`, `module.proto`, `channels.proto`, `device.proto` | config/channel saves, admin handlers                                                                                            |
+| `/prefs/<module>.bin`                                            | per-module `saveState()`                                                                                                        |
 
 `NodeDB`'s constructor calls `loadFromDisk()`, so **any** suite that constructs one inherits whatever is there.
 
