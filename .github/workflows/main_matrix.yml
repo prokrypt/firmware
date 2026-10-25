@@ -265,7 +265,8 @@ jobs:
 
   gather-artifacts:
     # Only run on Release (workflow_dispatch) and Nightly (schedule) runs, not on PRs or merge_group runs.
-    if: github.repository_owner == 'meshtastic' && contains(fromJSON('["workflow_dispatch", "schedule"]'), github.event_name)
+    # The prokrypt fork releases from workflow_dispatch only.
+    if: (github.repository_owner == 'meshtastic' && contains(fromJSON('["workflow_dispatch", "schedule"]'), github.event_name)) || (github.repository_owner == 'prokrypt' && github.event_name == 'workflow_dispatch')
     strategy:
       fail-fast: false
       matrix:
@@ -492,7 +493,12 @@ jobs:
     permissions: # Needed for 'gh release upload'.
       contents: write
     runs-on: ubuntu-26.04
-    if: github.repository_owner == 'meshtastic' && github.event_name == 'workflow_dispatch' && github.event.inputs.nightly != 'true'
+    # The prokrypt fork has no PPA signing key, so it releases firmware without the Linux source packages.
+    if: >-
+      !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.nightly != 'true' &&
+      needs.gather-artifacts.result == 'success' &&
+      ((github.repository_owner == 'meshtastic' && needs.build-debian-src.result == 'success' &&
+      needs.package-pio-deps-native-tft.result == 'success') || github.repository_owner == 'prokrypt')
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
     needs:
@@ -515,6 +521,7 @@ jobs:
 
       - name: Generate release notes
         id: release_notes
+        if: github.repository_owner == 'meshtastic'
         run: |
           chmod +x ./bin/generate_release_notes.py
           NOTES=$(./bin/generate_release_notes.py ${{ needs.version.outputs.long }} --compare-ref HEAD 2>release_notes.log)
@@ -532,12 +539,13 @@ jobs:
         with:
           draft: true
           prerelease: true
-          name: Meshtastic Firmware ${{ needs.version.outputs.long }} Alpha
+          name: ${{ github.repository_owner == 'meshtastic' && 'Meshtastic Firmware' || 'Firmware (no-auto-writes)' }} ${{ needs.version.outputs.long }} Alpha
           tag_name: v${{ needs.version.outputs.long }}
           target_commitish: ${{ github.sha }}
-          body: ${{ steps.release_notes.outputs.notes }}
+          body: ${{ steps.release_notes.outputs.notes || format('Built from {0}@{1}.', github.ref_name, github.sha) }}
 
       - name: Download source deb
+        if: github.repository_owner == 'meshtastic'
         uses: actions/download-artifact@v8
         with:
           pattern: firmware-debian-${{ needs.version.outputs.deb }}~UNRELEASED-src
@@ -545,6 +553,7 @@ jobs:
           path: ./output/debian-src
 
       - name: Download `native-tft` pio deps
+        if: github.repository_owner == 'meshtastic'
         uses: actions/download-artifact@v8
         with:
           pattern: platformio-deps-native-tft-${{ needs.version.outputs.long }}
@@ -552,6 +561,7 @@ jobs:
           path: ./output/pio-deps-native-tft
 
       - name: Zip Linux sources
+        if: github.repository_owner == 'meshtastic'
         working-directory: output
         run: |
           zip -j -9 -r ./meshtasticd-${{ needs.version.outputs.deb }}-src.zip ./debian-src
@@ -577,11 +587,17 @@ jobs:
 
       - name: Add sources to GitHub Release
         # Only run when targeting the default branch with workflow_dispatch
-        if: github.ref_name == github.event.repository.default_branch
+        if: github.repository_owner == 'meshtastic' && github.ref_name == github.event.repository.default_branch
         run: |
           gh release upload v${{ needs.version.outputs.long }} ./firmware-${{ needs.version.outputs.long }}.json
           gh release upload v${{ needs.version.outputs.long }} ./output/meshtasticd-${{ needs.version.outputs.deb }}-src.zip
           gh release upload v${{ needs.version.outputs.long }} ./output/platformio-deps-native-tft-${{ needs.version.outputs.long }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add manifest to GitHub Release
+        if: github.repository_owner == 'prokrypt'
+        run: gh release upload v${{ needs.version.outputs.long }} ./firmware-${{ needs.version.outputs.long }}.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -601,7 +617,11 @@ jobs:
           - rp2350
           - stm32
     runs-on: ubuntu-26.04
-    if: github.repository_owner == 'meshtastic' && github.event_name == 'workflow_dispatch' && github.event.inputs.nightly != 'true'
+    # !cancelled(): the fork skips build-debian-src upstream of release-artifacts, which would otherwise skip this job.
+    if: >-
+      !cancelled() && needs.release-artifacts.result == 'success' &&
+      contains(fromJSON('["meshtastic", "prokrypt"]'), github.repository_owner) &&
+      github.event_name == 'workflow_dispatch' && github.event.inputs.nightly != 'true'
     needs: [release-artifacts, version]
     steps:
       - name: Checkout
@@ -643,8 +663,8 @@ jobs:
         run: ls -lR
 
       - name: Add bins and debug elfs to GitHub Release
-        # Only run when targeting the default branch with workflow_dispatch
-        if: github.ref_name == github.event.repository.default_branch
+        # Only run when targeting the default branch with workflow_dispatch (any branch on the prokrypt fork)
+        if: github.ref_name == github.event.repository.default_branch || github.repository_owner == 'prokrypt'
         run: |
           gh release upload v${{ needs.version.outputs.long }} ./firmware-${{matrix.arch}}-${{ needs.version.outputs.long }}.zip
           gh release upload v${{ needs.version.outputs.long }} ./debug-elfs-${{matrix.arch}}-${{ needs.version.outputs.long }}.zip
