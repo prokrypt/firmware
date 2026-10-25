@@ -334,11 +334,11 @@ void test_something() {
 
 Each suite runs inside its own scratch `$HOME` (`bin/pio-test-isolate.sh`), so state cannot reach the next suite. The files in play are wider than module state, and all but the last live under `~/.portduino/default/prefs/`:
 
-| File                                                             | Written by                                                                                                                                                     |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File                                                             | Written by                                                                                                                      |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `nodes.proto`                                                    | any user-initiated `NodeDB` save (`set_favorite()`, `removeNodeByNum()`, `resetNodes()`, admin handlers) - boot never writes it |
-| `config.proto`, `module.proto`, `channels.proto`, `device.proto` | config/channel saves, admin handlers                                                                                                                           |
-| `/prefs/<module>.bin`                                            | per-module `saveState()`                                                                                                                                       |
+| `config.proto`, `module.proto`, `channels.proto`, `device.proto` | config/channel saves, admin handlers                                                                                            |
+| `/prefs/<module>.bin`                                            | per-module `saveState()`                                                                                                        |
 
 `NodeDB`'s constructor calls `loadFromDisk()`, so **any** suite that constructs one inherits whatever is there.
 
