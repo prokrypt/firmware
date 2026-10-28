@@ -9,8 +9,10 @@ class MockMeshService : public MeshService
     void sendClientNotification(meshtastic_ClientNotification *n) override
     {
         notificationCount++;
+        strncpy(lastNotification, n->message, sizeof(lastNotification) - 1);
         releaseClientNotificationToPool(n);
     }
 
     uint32_t notificationCount = 0;
+    char lastNotification[sizeof(meshtastic_ClientNotification::message)] = {};
 };

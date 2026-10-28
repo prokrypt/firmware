@@ -57,6 +57,9 @@ size_t fsUsedBytes();
 void fsInit();
 bool renameFile(const char *pathFrom, const char *pathTo);
 bool fsFormat();
+// True when the filesystem itself reports dirname's metadata as corrupt (not merely missing). Such a directory
+// never heals and every write under it fails, so only a format clears it.
+bool fsDirDamaged(const char *dirname);
 std::vector<meshtastic_FileInfo> getFiles(const char *dirname, uint8_t levels, size_t maxCount = 64, bool *wasLimited = nullptr);
 void listDir(const char *dirname, uint8_t levels, bool del = false);
 void rmDir(const char *dirname);

@@ -404,6 +404,15 @@ void rmDir(const char *dirname)
  */
 __attribute__((weak, noinline)) void preFSBegin() {}
 
+/**
+ * Platforms whose filesystem can tell corrupt metadata from a missing file (nrf52) override this.
+ */
+__attribute__((weak, noinline)) bool fsDirDamaged(const char *dirname)
+{
+    (void)dirname;
+    return false;
+}
+
 void fsInit()
 {
 #ifdef FSCom
