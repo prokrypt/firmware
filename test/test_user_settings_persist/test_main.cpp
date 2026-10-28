@@ -18,6 +18,7 @@
 
 #if defined(FSCom) && !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
 
+#include "FlashGuard.h"
 #include "main.h" // rebootAtMsec
 #include "mesh/Channels.h"
 #include "mesh/NodeDB.h"
@@ -25,6 +26,8 @@
 #include "support/AdminModuleTestShim.h"
 #include "support/MockMeshService.h"
 #include <cstring>
+#include <string>
+#include <unistd.h>
 
 namespace
 {
@@ -196,10 +199,38 @@ static void test_setConfig_withoutTransaction_survivesReboot(void)
     TEST_ASSERT_EQUAL_UINT32(1800, moduleConfig.telemetry.environment_update_interval);
 }
 
+// A user save that cannot write (here a directory squats on device.proto's temp file, so SafeFile can't open
+// it) must tell the client and stay owed: the retry at the user's reboot lands it once flash takes writes again.
+static void test_failedUserSave_notifiesAndRetriesAtReboot(void)
+{
+    const char *blocker = "/prefs/device.proto.tmp";
+    const char *blockerFile = "/prefs/device.proto.tmp/x";
+    FSCom.mkdir(blocker);
+    File f = FSCom.open(blockerFile, FILE_O_WRITE);
+    TEST_ASSERT_TRUE(f);
+    f.print("x");
+    f.close();
+
+    sendBeginEdit();
+    sendSetOwner("Retry Name", "RTRY");
+    sendCommitEdit();
+    TEST_ASSERT_GREATER_THAN_UINT32(0, mockSvc->notificationCount);
+
+    FSCom.remove(blockerFile);
+    // Portduino's FS::rmdir() calls unlink(), which can't remove a directory; go to the host FS instead.
+    TEST_ASSERT_EQUAL(0, ::rmdir((std::string(portduinoVFS->mountpoint()) + blocker).c_str()));
+    TEST_ASSERT_FALSE(FSCom.exists(blocker));
+    {
+        FlashGuard::Scope userWrite("test reboot");
+        nodeDB->retryFailedUserSave();
+    }
+    assertOwnerAfterReboot("Retry Name", "RTRY");
+}
+
 // A second reboot with no user action in between must not lose or rewrite anything.
 static void test_secondReboot_keepsOwner(void)
 {
-    assertOwnerAfterReboot("Abandoned Name", "ABND");
+    assertOwnerAfterReboot("Retry Name", "RTRY");
 }
 
 USP_TEST_ENTRY void setup()
@@ -212,6 +243,7 @@ USP_TEST_ENTRY void setup()
     RUN_TEST(test_setOwner_abandonedTransaction_committedByNextAdmin);
     RUN_TEST(test_setConfig_inEditTransaction_survivesReboot);
     RUN_TEST(test_setConfig_withoutTransaction_survivesReboot);
+    RUN_TEST(test_failedUserSave_notifiesAndRetriesAtReboot);
     RUN_TEST(test_secondReboot_keepsOwner);
     exit(UNITY_END());
 }

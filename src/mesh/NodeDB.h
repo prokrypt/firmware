@@ -341,6 +341,9 @@ class NodeDB
     bool saveToDisk(int saveWhat = SEGMENT_CONFIG | SEGMENT_MODULECONFIG | SEGMENT_DEVICESTATE | SEGMENT_CHANNELS |
                                    SEGMENT_NODEDATABASE);
 
+    /// Write again the segments a user-initiated save failed to write. Called from the user's shutdown/reboot.
+    void retryFailedUserSave();
+
     /** Reinit radio config if needed, because either:
      * a) sometimes a buggy android app might send us bogus settings or
      * b) the client set factory_reset
@@ -801,6 +804,9 @@ class NodeDB
     /// write to flash
     /// @return true if the save was successful
     bool saveToDiskNoRetry(int saveWhat);
+    bool saveToDiskWithRetry(int saveWhat);
+    void notifyUserSaveFailed();
+    int failedUserSegments = 0; // segments a user-initiated save could not write, still owed to flash
 
     bool saveChannelsToDisk();
     bool saveDeviceStateToDisk();

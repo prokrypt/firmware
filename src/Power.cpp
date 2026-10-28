@@ -897,6 +897,7 @@ static uint32_t userRebootAtMsec = 0;
 static void saveForUserPowerOff()
 {
     FlashGuard::Scope userWrite("user shutdown/reboot");
+    nodeDB->retryFailedUserSave(); // the change that scheduled this reboot may not have landed
     notifyUserPowerOff.notifyObservers(NULL); // sensors bank their calibration
 #if HAS_SCREEN
     messageStore.saveToFlash();

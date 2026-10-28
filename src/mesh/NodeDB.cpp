@@ -3439,6 +3439,41 @@ static bool filesystemStillReadable()
 
 bool NodeDB::saveToDisk(int saveWhat)
 {
+    const bool success = saveToDiskWithRetry(saveWhat);
+    // Nothing saves automatically any more, so a user change whose write failed would be lost without a word.
+    // Keep it pending for retryFailedUserSave() and tell the client.
+    if (success) {
+        failedUserSegments &= ~saveWhat;
+    } else if (FlashGuard::inScope()) {
+        failedUserSegments |= saveWhat;
+        notifyUserSaveFailed();
+    }
+    return success;
+}
+
+void NodeDB::retryFailedUserSave()
+{
+    if (!failedUserSegments)
+        return;
+    LOG_WARN("Retry failed user save %d", failedUserSegments);
+    saveToDisk(failedUserSegments);
+}
+
+void NodeDB::notifyUserSaveFailed()
+{
+    if (!service)
+        return;
+    meshtastic_ClientNotification *cn = clientNotificationPool.allocZeroed();
+    if (!cn)
+        return;
+    cn->level = meshtastic_LogRecord_Level_ERROR;
+    cn->time = getValidTime(RTCQualityFromNet);
+    snprintf(cn->message, sizeof(cn->message), "Couldn't save your change to flash. It will be retried at restart.");
+    service->sendClientNotification(cn);
+}
+
+bool NodeDB::saveToDiskWithRetry(int saveWhat)
+{
     LOG_DEBUG("Save to disk %d", saveWhat);
 
     // do not try to save anything if power level is not safe. In many cases flash will be lock-protected
