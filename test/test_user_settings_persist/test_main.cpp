@@ -29,6 +29,14 @@
 #include <string>
 #include <unistd.h>
 
+// The simulator's filesystem can't tear a LittleFS directory pair, so the suite stands in for the nRF52 check.
+static bool fakeDirDamaged = false;
+bool fsDirDamaged(const char *dirname)
+{
+    (void)dirname;
+    return fakeDirDamaged;
+}
+
 namespace
 {
 
@@ -58,6 +66,27 @@ void sendAdmin(meshtastic_AdminMessage &m)
     mp.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
     admin->handleReceivedProtobuf(mp, &m);
     admin->drainReply();
+}
+
+// A directory squatting on device.proto's temp file makes SafeFile's open fail, the way a busy or damaged flash does.
+const char *blocker = "/prefs/device.proto.tmp";
+const char *blockerFile = "/prefs/device.proto.tmp/x";
+
+void blockDeviceStateSave()
+{
+    FSCom.mkdir(blocker);
+    File f = FSCom.open(blockerFile, FILE_O_WRITE);
+    TEST_ASSERT_TRUE(f);
+    f.print("x");
+    f.close();
+}
+
+void unblockDeviceStateSave()
+{
+    FSCom.remove(blockerFile);
+    // Portduino's FS::rmdir() calls unlink(), which can't remove a directory; go to the host FS instead.
+    TEST_ASSERT_EQUAL(0, ::rmdir((std::string(portduinoVFS->mountpoint()) + blocker).c_str()));
+    TEST_ASSERT_FALSE(FSCom.exists(blocker));
 }
 
 void sendBeginEdit()
@@ -199,27 +228,18 @@ static void test_setConfig_withoutTransaction_survivesReboot(void)
     TEST_ASSERT_EQUAL_UINT32(1800, moduleConfig.telemetry.environment_update_interval);
 }
 
-// A user save that cannot write (here a directory squats on device.proto's temp file, so SafeFile can't open
-// it) must tell the client and stay owed: the retry at the user's reboot lands it once flash takes writes again.
+// A user save that cannot write must tell the client and stay owed: the retry at the user's reboot lands it
+// once flash takes writes again.
 static void test_failedUserSave_notifiesAndRetriesAtReboot(void)
 {
-    const char *blocker = "/prefs/device.proto.tmp";
-    const char *blockerFile = "/prefs/device.proto.tmp/x";
-    FSCom.mkdir(blocker);
-    File f = FSCom.open(blockerFile, FILE_O_WRITE);
-    TEST_ASSERT_TRUE(f);
-    f.print("x");
-    f.close();
-
+    blockDeviceStateSave();
     sendBeginEdit();
     sendSetOwner("Retry Name", "RTRY");
     sendCommitEdit();
     TEST_ASSERT_GREATER_THAN_UINT32(0, mockSvc->notificationCount);
+    TEST_ASSERT_NOT_NULL(strstr(mockSvc->lastNotification, "retried at restart"));
 
-    FSCom.remove(blockerFile);
-    // Portduino's FS::rmdir() calls unlink(), which can't remove a directory; go to the host FS instead.
-    TEST_ASSERT_EQUAL(0, ::rmdir((std::string(portduinoVFS->mountpoint()) + blocker).c_str()));
-    TEST_ASSERT_FALSE(FSCom.exists(blocker));
+    unblockDeviceStateSave();
     {
         FlashGuard::Scope userWrite("test reboot");
         nodeDB->retryFailedUserSave();
@@ -227,7 +247,24 @@ static void test_failedUserSave_notifiesAndRetriesAtReboot(void)
     assertOwnerAfterReboot("Retry Name", "RTRY");
 }
 
-// A second reboot with no user action in between must not lose or rewrite anything.
+// A torn /prefs pair (seen on a T1000-E as "Corrupted dir pair") never heals and hides every file, so a retry
+// can't help: the alert must send the user to a factory reset instead.
+static void test_failedUserSave_damagedStorage_alertsFactoryReset(void)
+{
+    blockDeviceStateSave();
+    fakeDirDamaged = true;
+    sendBeginEdit();
+    sendSetOwner("Damaged Name", "DMGD");
+    sendCommitEdit();
+    fakeDirDamaged = false;
+    unblockDeviceStateSave();
+
+    TEST_ASSERT_GREATER_THAN_UINT32(0, mockSvc->notificationCount);
+    TEST_ASSERT_NOT_NULL(strstr(mockSvc->lastNotification, "factory reset"));
+}
+
+// A second reboot with no user action in between must not lose or rewrite anything, and the save that
+// failed on damaged storage must not have landed.
 static void test_secondReboot_keepsOwner(void)
 {
     assertOwnerAfterReboot("Retry Name", "RTRY");
@@ -244,6 +281,7 @@ USP_TEST_ENTRY void setup()
     RUN_TEST(test_setConfig_inEditTransaction_survivesReboot);
     RUN_TEST(test_setConfig_withoutTransaction_survivesReboot);
     RUN_TEST(test_failedUserSave_notifiesAndRetriesAtReboot);
+    RUN_TEST(test_failedUserSave_damagedStorage_alertsFactoryReset);
     RUN_TEST(test_secondReboot_keepsOwner);
     exit(UNITY_END());
 }

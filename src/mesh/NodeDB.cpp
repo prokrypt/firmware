@@ -904,7 +904,14 @@ bool NodeDB::factoryReset(bool eraseBleBonds)
     LOG_INFO("Factory reset");
     // first, remove the "/prefs" (this removes most prefs)
     spiLock->lock();
-    rmDir("/prefs"); // this uses spilock internally...
+    if (fsDirDamaged("/prefs")) {
+        // rmDir can't walk a corrupt directory, so the reset would leave the damage and every later save would fail.
+        LOG_WARN("Factory reset: /prefs is damaged, format the filesystem");
+        if (!fsFormat())
+            LOG_ERROR("Factory reset: format failed");
+    } else {
+        rmDir("/prefs"); // this uses spilock internally...
+    }
 
 #ifdef FSCom
     if (FSCom.exists("/static/rangetest.csv") && !FSCom.remove("/static/rangetest.csv")) {
@@ -2447,6 +2454,15 @@ void NodeDB::loadFromDisk()
     // Mark the current device state as completely unusable, so that if we fail reading the entire file from
     // disk we will still factoryReset to restore things.
     devicestate.version = 0;
+#ifdef FSCom
+    {
+        concurrency::LockGuard g(spiLock);
+        if (fsDirDamaged("/prefs")) {
+            LOG_ERROR("/prefs is damaged: settings can't be read or saved until a factory reset");
+            RECORD_CRITICALERROR(meshtastic_CriticalErrorCode_FLASH_CORRUPTION_UNRECOVERABLE);
+        }
+    }
+#endif
 #ifdef MESHTASTIC_ENCRYPTED_STORAGE
     // Reset the per-load decrypt-failure tracker. Set by loadProto on any
     // encrypted file that fails to decrypt or proto-decode; consumed by
@@ -3468,7 +3484,16 @@ void NodeDB::notifyUserSaveFailed()
         return;
     cn->level = meshtastic_LogRecord_Level_ERROR;
     cn->time = getValidTime(RTCQualityFromNet);
-    snprintf(cn->message, sizeof(cn->message), "Couldn't save your change to flash. It will be retried at restart.");
+    bool damaged;
+    {
+        concurrency::LockGuard g(spiLock);
+        damaged = fsDirDamaged("/prefs");
+    }
+    if (damaged)
+        snprintf(cn->message, sizeof(cn->message),
+                 "Device storage is damaged, so settings can't be saved. Do a factory reset to fix it.");
+    else
+        snprintf(cn->message, sizeof(cn->message), "Couldn't save your change to flash. It will be retried at restart.");
     service->sendClientNotification(cn);
 }
 
@@ -3501,7 +3526,16 @@ bool NodeDB::saveToDiskWithRetry(int saveWhat)
 
     // Never format on our own judgement: wiping the filesystem is a user command (factory reset).
     if (!success && powerHAL_isPowerLevelSafe()) {
-        if (filesystemStillReadable()) {
+        bool damaged;
+        {
+            concurrency::LockGuard g(spiLock);
+            damaged = fsDirDamaged("/prefs");
+        }
+        // A torn directory pair hides every file behind it, which filesystemStillReadable() takes for a fresh
+        // device. Boot already recorded the critical error; the client alert tells the user to factory reset.
+        if (damaged) {
+            LOG_ERROR("Save to disk failed: /prefs is damaged, a factory reset will format it");
+        } else if (filesystemStillReadable()) {
             LOG_ERROR("Save to disk failed but the filesystem still reads (full or busy?)");
         } else {
             LOG_ERROR("Save to disk failed and the filesystem is unreadable; not formatting");

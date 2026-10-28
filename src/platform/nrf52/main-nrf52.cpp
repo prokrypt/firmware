@@ -315,6 +315,24 @@ void preFSBegin()
     LOG_INFO("LittleFS format complete; restoring default settings");
 }
 
+// Adafruit's exists()/open() collapse LFS_ERR_CORRUPT into "not there", so a directory whose tail pair is torn
+// looks empty. Walk it with the raw API to see the error.
+bool fsDirDamaged(const char *dirname)
+{
+    lfs_t *lfs = InternalFS._getFS();
+    lfs_dir_t dir;
+    struct lfs_info info;
+    InternalFS._lockFS();
+    int rc = lfs_dir_open(lfs, &dir, dirname);
+    if (rc == LFS_ERR_OK) {
+        while ((rc = lfs_dir_read(lfs, &dir, &info)) > 0) {
+        }
+        lfs_dir_close(lfs, &dir);
+    }
+    InternalFS._unlockFS();
+    return rc == LFS_ERR_CORRUPT;
+}
+
 extern "C" void lfs_assert(const char *reason)
 {
     LOG_ERROR("LittleFS corruption detected: %s", reason);
