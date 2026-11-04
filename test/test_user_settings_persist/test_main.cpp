@@ -3,7 +3,8 @@
 // NodeDB from the files on flash and checks what came back.
 //
 // The no-auto-writes fork removed every automatic save (deep sleep, node DB autosave, boot catch-all),
-// so a user change now reaches flash only through the admin save itself. These tests pin that it does.
+// so a user change now reaches flash only through the admin save itself, and learned nodes only through
+// the user's own shutdown or reboot. These tests pin that both do.
 #include "MeshTypes.h" // Include BEFORE TestUtil.h
 #include "TestUtil.h"
 #include <unity.h>
@@ -270,6 +271,57 @@ static void test_secondReboot_keepsOwner(void)
     assertOwnerAfterReboot("Retry Name", "RTRY");
 }
 
+// A node heard on the mesh, with the NodeInfo that keeps it in the DB at boot.
+static const NodeNum kLearnedNode = 0x1234abcd;
+static void learnNode(const char *longName)
+{
+    meshtastic_NodeInfoLite *n = nodeDB->getOrCreateMeshNode(kLearnedNode);
+    TEST_ASSERT_NOT_NULL(n);
+    n->bitfield |= NODEINFO_BITFIELD_HAS_USER_MASK;
+    strncpy(n->long_name, longName, sizeof(n->long_name) - 1);
+}
+
+// Hearing a node is not a reason to write flash, and an automatic reboot writes nothing.
+static void test_learnedNode_lostWithoutUserPowerOff(void)
+{
+    learnNode("Heard Once");
+    rebootNodeDB();
+    TEST_ASSERT_NULL(nodeDB->getMeshNode(kLearnedNode));
+}
+
+// The user's own reboot (what Power::reboot() runs for it) saves nodes learned since the last save.
+static void test_learnedNode_savedAtUserReboot(void)
+{
+    learnNode("Kept Node");
+    {
+        FlashGuard::Scope userWrite("test user reboot");
+        nodeDB->saveAtUserPowerOff(SEGMENT_NODEDATABASE);
+    }
+    rebootNodeDB();
+    const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(kLearnedNode);
+    TEST_ASSERT_NOT_NULL(n);
+    TEST_ASSERT_EQUAL_STRING("Kept Node", n->long_name);
+}
+
+// A user save that failed is still written at the user's reboot alongside the node DB.
+static void test_userReboot_alsoRetriesFailedSave(void)
+{
+    blockDeviceStateSave();
+    sendBeginEdit();
+    sendSetOwner("Late Name", "LATE");
+    sendCommitEdit();
+    unblockDeviceStateSave();
+    learnNode("Late Node");
+    {
+        FlashGuard::Scope userWrite("test user reboot");
+        nodeDB->saveAtUserPowerOff(SEGMENT_NODEDATABASE);
+    }
+    assertOwnerAfterReboot("Late Name", "LATE");
+    const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(kLearnedNode);
+    TEST_ASSERT_NOT_NULL(n);
+    TEST_ASSERT_EQUAL_STRING("Late Node", n->long_name);
+}
+
 USP_TEST_ENTRY void setup()
 {
     initializeTestEnvironment();
@@ -283,6 +335,9 @@ USP_TEST_ENTRY void setup()
     RUN_TEST(test_failedUserSave_notifiesAndRetriesAtReboot);
     RUN_TEST(test_failedUserSave_damagedStorage_alertsFactoryReset);
     RUN_TEST(test_secondReboot_keepsOwner);
+    RUN_TEST(test_learnedNode_lostWithoutUserPowerOff);
+    RUN_TEST(test_learnedNode_savedAtUserReboot);
+    RUN_TEST(test_userReboot_alsoRetriesFailedSave);
     exit(UNITY_END());
 }
 
