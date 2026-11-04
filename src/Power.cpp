@@ -1068,7 +1068,7 @@ void Power::reboot()
 {
     notifyReboot.notifyObservers(NULL);
     // Automatic reboots (stuck-TX watchdog, radio recovery, region mismatch, session expiry) write nothing.
-    // Settings were saved when the user changed them, but nodes and keys learned since the last save are only in RAM.
+    // Settings were saved when the user changed them; what was heard since about our own node and favourites is RAM only.
     if (rebootAtMsec != 0 && rebootAtMsec == userRebootAtMsec)
         saveForUserPowerOff(SEGMENT_NODEDATABASE);
 #if defined(ARCH_ESP32)

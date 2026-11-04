@@ -3,8 +3,8 @@
 // NodeDB from the files on flash and checks what came back.
 //
 // The no-auto-writes fork removed every automatic save (deep sleep, node DB autosave, boot catch-all),
-// so a user change now reaches flash only through the admin save itself, and learned nodes only through
-// the user's own shutdown or reboot. These tests pin that both do.
+// so a user change now reaches flash only through the admin save itself, and what was heard about a
+// favourite only through the user's own shutdown or reboot. These tests pin that both do.
 #include "MeshTypes.h" // Include BEFORE TestUtil.h
 #include "TestUtil.h"
 #include <unity.h>
@@ -271,39 +271,67 @@ static void test_secondReboot_keepsOwner(void)
     assertOwnerAfterReboot("Retry Name", "RTRY");
 }
 
-// A node heard on the mesh, with the NodeInfo that keeps it in the DB at boot.
-static const NodeNum kLearnedNode = 0x1234abcd;
-static void learnNode(const char *longName)
+// Flash keeps our own node and favourites only (everyone else stays in RAM); these use one of each.
+static const NodeNum kFavorite = 0x1234abcd;
+static const NodeNum kStranger = 0x1234abce;
+
+// Hearing a node's NodeInfo: RAM only. An existing entry (and its favourite bit) is updated in place.
+static meshtastic_NodeInfoLite *hearNode(NodeNum num, const char *longName)
 {
-    meshtastic_NodeInfoLite *n = nodeDB->getOrCreateMeshNode(kLearnedNode);
+    meshtastic_NodeInfoLite *n = nodeDB->getOrCreateMeshNode(num);
     TEST_ASSERT_NOT_NULL(n);
     n->bitfield |= NODEINFO_BITFIELD_HAS_USER_MASK;
+    memset(n->long_name, 0, sizeof(n->long_name));
     strncpy(n->long_name, longName, sizeof(n->long_name) - 1);
+    return n;
 }
 
-// Hearing a node is not a reason to write flash, and an automatic reboot writes nothing.
-static void test_learnedNode_lostWithoutUserPowerOff(void)
+// What Power::reboot() runs for the user's own reboot.
+static void userRebootSave()
 {
-    learnNode("Heard Once");
-    rebootNodeDB();
-    TEST_ASSERT_NULL(nodeDB->getMeshNode(kLearnedNode));
+    FlashGuard::Scope userWrite("test user reboot");
+    nodeDB->saveAtUserPowerOff(SEGMENT_NODEDATABASE);
 }
 
-// The user's own reboot (what Power::reboot() runs for it) saves nodes learned since the last save.
-static void test_learnedNode_savedAtUserReboot(void)
+static void assertFavoriteAfterReboot(const char *longName)
 {
-    learnNode("Kept Node");
-    {
-        FlashGuard::Scope userWrite("test user reboot");
-        nodeDB->saveAtUserPowerOff(SEGMENT_NODEDATABASE);
-    }
     rebootNodeDB();
-    const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(kLearnedNode);
+    const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(kFavorite);
     TEST_ASSERT_NOT_NULL(n);
-    TEST_ASSERT_EQUAL_STRING("Kept Node", n->long_name);
+    TEST_ASSERT_TRUE(nodeInfoLiteIsFavorite(n));
+    TEST_ASSERT_EQUAL_STRING(longName, n->long_name);
 }
 
-// A user save that failed is still written at the user's reboot alongside the node DB.
+// News about a favourite heard after the user favourited it is RAM only until the user powers off.
+static void test_favorite_freshDataLostWithoutUserPowerOff(void)
+{
+    hearNode(kFavorite, "Fav Old")->bitfield |= NODEINFO_BITFIELD_IS_FAVORITE_MASK;
+    {
+        FlashGuard::Scope userWrite("test set favorite");
+        TEST_ASSERT_TRUE(nodeDB->saveToDisk(SEGMENT_NODEDATABASE));
+    }
+    hearNode(kFavorite, "Fav New");
+    assertFavoriteAfterReboot("Fav Old");
+}
+
+// The user's own reboot keeps it, as the user's shutdown already did.
+static void test_favorite_freshDataSavedAtUserReboot(void)
+{
+    hearNode(kFavorite, "Fav New");
+    userRebootSave();
+    assertFavoriteAfterReboot("Fav New");
+}
+
+// The reboot save is still favourites-only: a node the user never favourited stays in RAM.
+static void test_stranger_notSavedAtUserReboot(void)
+{
+    hearNode(kStranger, "Stranger");
+    userRebootSave();
+    assertFavoriteAfterReboot("Fav New");
+    TEST_ASSERT_NULL(nodeDB->getMeshNode(kStranger));
+}
+
+// A user save that failed is written at the user's reboot together with the node DB.
 static void test_userReboot_alsoRetriesFailedSave(void)
 {
     blockDeviceStateSave();
@@ -311,15 +339,12 @@ static void test_userReboot_alsoRetriesFailedSave(void)
     sendSetOwner("Late Name", "LATE");
     sendCommitEdit();
     unblockDeviceStateSave();
-    learnNode("Late Node");
-    {
-        FlashGuard::Scope userWrite("test user reboot");
-        nodeDB->saveAtUserPowerOff(SEGMENT_NODEDATABASE);
-    }
+    hearNode(kFavorite, "Fav Late");
+    userRebootSave();
     assertOwnerAfterReboot("Late Name", "LATE");
-    const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(kLearnedNode);
+    const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(kFavorite);
     TEST_ASSERT_NOT_NULL(n);
-    TEST_ASSERT_EQUAL_STRING("Late Node", n->long_name);
+    TEST_ASSERT_EQUAL_STRING("Fav Late", n->long_name);
 }
 
 USP_TEST_ENTRY void setup()
@@ -335,8 +360,9 @@ USP_TEST_ENTRY void setup()
     RUN_TEST(test_failedUserSave_notifiesAndRetriesAtReboot);
     RUN_TEST(test_failedUserSave_damagedStorage_alertsFactoryReset);
     RUN_TEST(test_secondReboot_keepsOwner);
-    RUN_TEST(test_learnedNode_lostWithoutUserPowerOff);
-    RUN_TEST(test_learnedNode_savedAtUserReboot);
+    RUN_TEST(test_favorite_freshDataLostWithoutUserPowerOff);
+    RUN_TEST(test_favorite_freshDataSavedAtUserReboot);
+    RUN_TEST(test_stranger_notSavedAtUserReboot);
     RUN_TEST(test_userReboot_alsoRetriesFailedSave);
     exit(UNITY_END());
 }
