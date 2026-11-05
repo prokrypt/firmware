@@ -83,7 +83,9 @@ class PositionModule : public ProtobufModule<meshtastic_Position>, private concu
     bool sendOurPositionToPhone();
     bool hasSentPositionToPhone = false;
     uint32_t lastPhoneSendMs = 0;
-    static constexpr uint32_t sendToPhoneIntervalMs = 60 * 1000; // Matches telemetry's local cadence
+    // Position at the last phone send, to pick the PhoneSelfReport cadence.
+    int32_t lastPhoneSendLatI = 0;
+    int32_t lastPhoneSendLonI = 0;
     struct SmartPosition getDistanceTraveledSinceLastSend(meshtastic_PositionLite currentPosition);
     // Broadcast early when we have moved far enough since the last send, subject to the minimum
     // interval. Stamps the cadence and the last-sent coords only on a send that went out.

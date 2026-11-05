@@ -13,6 +13,7 @@
 #include "gps/RTC.h"
 #include "main.h"
 #include "memGet.h"
+#include "modules/PhoneSelfReport.h"
 #include <OLEDDisplay.h>
 #include <OLEDDisplayUi.h>
 #include <meshUtils.h>
@@ -40,7 +41,20 @@ int32_t DeviceTelemetryModule::runOnce()
     } else if (service->isToPhoneQueueEmpty()) {
         // Just send to phone when it's not our time to send to mesh yet
         // Only send while queue is empty (phone assumed connected)
-        sendTelemetry(NODENUM_BROADCAST, true);
+        meshtastic_Telemetry current = getDeviceTelemetry();
+        const uint32_t batteryLevel = current.variant.device_metrics.battery_level;
+        const bool batteryChanged = !hasSentTelemetryToPhone || batteryLevel != lastPhoneBatteryLevel;
+        if (!hasSentTelemetryToPhone ||
+            Throttle::hasElapsed(lastSentTelemetryToPhone, PhoneSelfReport::intervalMs(batteryChanged))) {
+            if (sendTelemetry(NODENUM_BROADCAST, true)) {
+                hasSentTelemetryToPhone = true;
+                lastSentTelemetryToPhone = Time::getMillis();
+                lastPhoneBatteryLevel = batteryLevel;
+            }
+        } else {
+            // Keep our own NodeDB entry current for the next client handshake.
+            nodeDB->updateTelemetry(nodeDB->getNodeNum(), current, RX_SRC_LOCAL);
+        }
         if (lastSentStatsToPhone == 0 || Throttle::hasElapsed(lastSentStatsToPhone, sendStatsToPhoneIntervalMs)) {
             sendLocalStatsToPhone();
             lastSentStatsToPhone = Time::skipZero(Time::getMillis());
