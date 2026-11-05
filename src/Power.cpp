@@ -894,10 +894,12 @@ bool Power::ads1115Init()
 static uint32_t userRebootAtMsec = 0;
 
 // The user's own shutdown or reboot is the one time state the firmware gathered on its own reaches flash.
-static void saveForUserPowerOff()
+// `segments` are the NodeDB files to write; a user save that failed (maybe the change that scheduled this
+// reboot) is written along with them.
+static void saveForUserPowerOff(int segments)
 {
     FlashGuard::Scope userWrite("user shutdown/reboot");
-    nodeDB->retryFailedUserSave(); // the change that scheduled this reboot may not have landed
+    nodeDB->saveAtUserPowerOff(segments);
     notifyUserPowerOff.notifyObservers(NULL); // sensors bank their calibration
 #if HAS_SCREEN
     messageStore.saveToFlash();
@@ -1066,8 +1068,9 @@ void Power::reboot()
 {
     notifyReboot.notifyObservers(NULL);
     // Automatic reboots (stuck-TX watchdog, radio recovery, region mismatch, session expiry) write nothing.
+    // Settings were saved when the user changed them; what was heard since about our own node and favourites is RAM only.
     if (rebootAtMsec != 0 && rebootAtMsec == userRebootAtMsec)
-        saveForUserPowerOff();
+        saveForUserPowerOff(SEGMENT_NODEDATABASE);
 #if defined(ARCH_ESP32)
     ESP.restart();
 #elif defined(ARCH_NRF52)
@@ -1129,11 +1132,7 @@ void Power::shutdown()
 #if !defined(ARCH_STM32WL)
     playShutdownMelody();
 #endif
-    {
-        FlashGuard::Scope userWrite("user shutdown");
-        nodeDB->saveToDisk();
-    }
-    saveForUserPowerOff();
+    saveForUserPowerOff(SEGMENT_CONFIG | SEGMENT_MODULECONFIG | SEGMENT_DEVICESTATE | SEGMENT_CHANNELS | SEGMENT_NODEDATABASE);
 #if defined(ARCH_NRF52) || defined(ARCH_ESP32) || defined(ARCH_RP2040) || defined(ARCH_STM32WL)
 #ifdef PIN_LED1
     ledOff(PIN_LED1);

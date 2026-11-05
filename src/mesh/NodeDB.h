@@ -341,8 +341,11 @@ class NodeDB
     bool saveToDisk(int saveWhat = SEGMENT_CONFIG | SEGMENT_MODULECONFIG | SEGMENT_DEVICESTATE | SEGMENT_CHANNELS |
                                    SEGMENT_NODEDATABASE);
 
-    /// Write again the segments a user-initiated save failed to write. Called from the user's shutdown/reboot.
-    void retryFailedUserSave();
+    /// The user's shutdown/reboot: write `segments` plus any a user-initiated save failed to write, each file once.
+    void saveAtUserPowerOff(int segments);
+
+    /// Write again the segments a user-initiated save failed to write.
+    void retryFailedUserSave() { saveAtUserPowerOff(0); }
 
     /** Reinit radio config if needed, because either:
      * a) sometimes a buggy android app might send us bogus settings or

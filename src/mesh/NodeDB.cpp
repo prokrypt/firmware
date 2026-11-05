@@ -3467,12 +3467,13 @@ bool NodeDB::saveToDisk(int saveWhat)
     return success;
 }
 
-void NodeDB::retryFailedUserSave()
+void NodeDB::saveAtUserPowerOff(int segments)
 {
-    if (!failedUserSegments)
-        return;
-    LOG_WARN("Retry failed user save %d", failedUserSegments);
-    saveToDisk(failedUserSegments);
+    if (failedUserSegments)
+        LOG_WARN("Retry failed user save %d", failedUserSegments);
+    segments |= failedUserSegments;
+    if (segments)
+        saveToDisk(segments);
 }
 
 void NodeDB::notifyUserSaveFailed()
