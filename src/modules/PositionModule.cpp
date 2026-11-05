@@ -18,6 +18,7 @@
 #include "main.h"
 #include "meshUtils.h"
 #include "meshtastic/atak.pb.h"
+#include "modules/PhoneSelfReport.h"
 #include "sleep.h"
 #include "target_specific.h"
 #include <Throttle.h>
@@ -553,11 +554,17 @@ int32_t PositionModule::runOnce()
     // Only send while the queue is empty (phone assumed connected), like telemetry. The cadence
     // stamp only advances when a packet was actually queued, so a guard or allocation failure
     // retries on the next tick instead of waiting out a full interval.
+    const bool movedSincePhoneSend =
+        hasSentPositionToPhone &&
+        GeoCoord::latLongToMeter(lastPhoneSendLatI * 1e-7, lastPhoneSendLonI * 1e-7, localPosition.latitude_i * 1e-7,
+                                 localPosition.longitude_i * 1e-7) >= PhoneSelfReport::POSITION_CHANGE_METERS;
     if (shouldSendPositionToPhone(nodeDB->hasValidPosition(node), service->isToPhoneQueueEmpty(), hasSentPositionToPhone, now,
-                                  lastPhoneSendMs, sendToPhoneIntervalMs) &&
+                                  lastPhoneSendMs, PhoneSelfReport::intervalMs(movedSincePhoneSend)) &&
         sendOurPositionToPhone()) {
         hasSentPositionToPhone = true;
         lastPhoneSendMs = now;
+        lastPhoneSendLatI = localPosition.latitude_i;
+        lastPhoneSendLonI = localPosition.longitude_i;
     }
 
     // Periodic and smart broadcasts wait out the boot holdoff; a position the user asks for doesn't come through here.

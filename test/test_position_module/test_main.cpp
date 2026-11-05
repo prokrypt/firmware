@@ -1,4 +1,5 @@
 #include "TestUtil.h"
+#include "modules/PhoneSelfReport.h"
 #include "modules/PositionModule.h"
 #include <unity.h>
 
@@ -106,6 +107,26 @@ static void test_sendToPhone_sentAtTimeZeroStillHoldsCadence()
     TEST_ASSERT_TRUE(PositionModule::shouldSendPositionToPhone(true, true, true, 60000U, 0U, 60000U));
 }
 
+// Self-reports to the phone: once a minute while changing, every 15 minutes while not.
+static void test_phoneSelfReport_changedUsesFastCadence()
+{
+    TEST_ASSERT_EQUAL_UINT32(60000U, PhoneSelfReport::intervalMs(true));
+}
+
+static void test_phoneSelfReport_unchangedUsesSlowCadence()
+{
+    TEST_ASSERT_EQUAL_UINT32(900000U, PhoneSelfReport::intervalMs(false));
+}
+
+// A stationary node is held for the full slow cadence, then refreshed.
+static void test_sendToPhone_stationaryHoldsForSlowCadence()
+{
+    const uint32_t slow = PhoneSelfReport::intervalMs(false);
+    TEST_ASSERT_FALSE(PositionModule::shouldSendPositionToPhone(true, true, true, 60001U, 1U, slow));
+    TEST_ASSERT_FALSE(PositionModule::shouldSendPositionToPhone(true, true, true, 899999U, 0U, slow));
+    TEST_ASSERT_TRUE(PositionModule::shouldSendPositionToPhone(true, true, true, 900000U, 0U, slow));
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -131,6 +152,9 @@ void setup()
     RUN_TEST(test_sendToPhone_requiresIdlePhoneQueue);
     RUN_TEST(test_sendToPhone_survivesMillisRollover);
     RUN_TEST(test_sendToPhone_sentAtTimeZeroStillHoldsCadence);
+    RUN_TEST(test_phoneSelfReport_changedUsesFastCadence);
+    RUN_TEST(test_phoneSelfReport_unchangedUsesSlowCadence);
+    RUN_TEST(test_sendToPhone_stationaryHoldsForSlowCadence);
     exit(UNITY_END());
 }
 

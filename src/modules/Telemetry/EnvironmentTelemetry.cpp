@@ -19,6 +19,7 @@
 #include "graphics/images.h"
 #include "main.h"
 #include "modules/ExternalNotificationModule.h"
+#include "modules/PhoneSelfReport.h"
 #include "sleep.h"
 #include "target_specific.h"
 #include <OLEDDisplay.h>
@@ -473,10 +474,11 @@ int32_t EnvironmentTelemetryModule::runOnce()
             immediateSendRequested = false;
             if (transmitHistory)
                 transmitHistory->setLastSentToMesh(TX_HISTORY_KEY_ENVIRONMENT_TELEMETRY);
-        } else if (((lastSentToPhone == 0) || !Throttle::isWithinTimespanMs(lastSentToPhone, sendToPhoneIntervalMs)) &&
+        } else if (((lastSentToPhone == 0) ||
+                    !Throttle::isWithinTimespanMs(lastSentToPhone, PhoneSelfReport::intervalMs(false))) &&
                    (service->isToPhoneQueueEmpty())) {
             // Just send to phone when it's not our time to send to mesh yet
-            // Only send while queue is empty (phone assumed connected)
+            // Only send while queue is empty (phone assumed connected). Readings drift every sample, so slow cadence only.
             sendTelemetry(NODENUM_BROADCAST, true);
             lastSentToPhone = Time::skipZero(Time::getMillis());
         }
