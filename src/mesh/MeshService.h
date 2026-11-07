@@ -96,6 +96,9 @@ class MeshService
     /// True when the pending fromNum bumps are all routine and may wait for the batch to fill or age.
     bool holdNotifyForBatch(uint32_t pending, uint32_t routine);
 
+    /// True when the pending bumps are all routine and the idle phone has already read every packet they announced.
+    bool batchAlreadyRead(uint32_t pending, uint32_t routine);
+
   public:
     enum APIState {
         STATE_DISCONNECTED, // Initial state, no API is connected

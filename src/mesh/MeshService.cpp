@@ -152,6 +152,14 @@ void MeshService::notifyClientsIfDue()
         // the pass must still be pending afterwards rather than being marked delivered.
         const uint32_t num = fromNum;
         const uint32_t routine = routineFromNum; // after fromNum, see routineFromNum
+        if (batchAlreadyRead(num - oldFromNum, routine)) {
+            // The idle phone read the batch on its own poll (it drains after every heartbeat): a notify now
+            // would only wake it to find the queue empty.
+            oldFromNum = num;
+            routineFromNum -= routine;
+            batchHeld = false;
+            return;
+        }
         if (holdNotifyForBatch(num - oldFromNum, routine))
             return;
         const uint32_t generation = identityGeneration;
@@ -163,6 +171,11 @@ void MeshService::notifyClientsIfDue()
             batchHeld = false;
         }
     }
+}
+
+bool MeshService::batchAlreadyRead(uint32_t pending, uint32_t routine)
+{
+    return phoneIdle && routine >= pending && toPhoneQueue.numUsed() == 0;
 }
 
 bool MeshService::holdNotifyForBatch(uint32_t pending, uint32_t routine)

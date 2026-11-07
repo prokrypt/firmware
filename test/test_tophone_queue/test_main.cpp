@@ -241,6 +241,25 @@ static void test_phone_coming_back_gets_the_held_batch_at_once(void)
     TEST_ASSERT_EQUAL_INT(1, notifyPass());
 }
 
+// The idle phone drains the queue on its own after each heartbeat. A batch it already read must not
+// wake it again later for an empty queue.
+static void test_batch_read_on_the_phones_own_poll_sends_no_notify(void)
+{
+    service->setPhoneIdle(true);
+    send(1, meshtastic_PortNum_TELEMETRY_APP);
+    TEST_ASSERT_EQUAL_INT(0, notifyPass());
+    assertIds({1}, "the phone polls and reads the held reading");
+    TEST_ASSERT_EQUAL_INT(0, notifyPass());
+    testService->ageHeldBatch();
+    TEST_ASSERT_EQUAL_INT(0, notifyPass());
+
+    // Nothing is left owed: the next reading starts a fresh batch, and a message still goes out at once.
+    send(2, meshtastic_PortNum_POSITION_APP);
+    TEST_ASSERT_EQUAL_INT(0, notifyPass());
+    send(3, meshtastic_PortNum_TEXT_MESSAGE_APP);
+    TEST_ASSERT_EQUAL_INT(1, notifyPass());
+}
+
 static void test_routine_classification(void)
 {
     meshtastic_MeshPacket p = basePacket(1);
@@ -321,6 +340,7 @@ void setup()
     RUN_TEST(test_other_phone_data_goes_out_at_once);
     RUN_TEST(test_half_full_queue_goes_out_at_once);
     RUN_TEST(test_phone_coming_back_gets_the_held_batch_at_once);
+    RUN_TEST(test_batch_read_on_the_phones_own_poll_sends_no_notify);
     RUN_TEST(test_routine_classification);
 
     exit(UNITY_END());
