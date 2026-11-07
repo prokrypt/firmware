@@ -457,6 +457,7 @@ void test_state_persistence()
 
         TEST_MSG_FMT("Phase 1: entries=%u hop=%u", shim->getEntryCount(), shim->getLastRequiredHop());
         TEST_ASSERT_GREATER_THAN_UINT8(0, shim->getEntryCount());
+        shim->saveToDisk(); // the fork saves only at a user shutdown/reboot, not on teardown
         hopScalingModule = nullptr;
     }
 
