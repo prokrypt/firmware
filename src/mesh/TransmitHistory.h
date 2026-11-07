@@ -11,7 +11,8 @@
  *
  * In its place, a boot holdoff stops our own periodic broadcasts for BOOT_HOLDOFF_MS after a cold boot, so a
  * reboot loop cannot flood the mesh. Sends a user triggers (phone, admin, menus, buttons) do not check it, and
- * neither does a wake from deep sleep (ESP32): that is a scheduled duty cycle, a button press or a packet, not a
+ * neither does a wake from deep sleep (ESP32) or, on nRF52, a System OFF wake or a restart the firmware flagged as
+ * its own (user reboot, power-saving duty cycle): that is a scheduled duty cycle, a button press or a packet, not a
  * reboot loop.
  */
 
