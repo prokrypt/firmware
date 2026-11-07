@@ -80,6 +80,22 @@ class MeshService
     /// Updated in loop() to detect when fromNum changes
     uint32_t oldFromNum = 0;
 
+  protected: // batching state, reachable from test shims
+    /// fromNum bumps since the last notify that came from routine packets (see isRoutineForPhone()).
+    /// Bumped before fromNum and read after it. A routine packet caught between the two only makes
+    /// one loop hold a moment longer and the next batch go out early; never a non-routine one wait.
+    std::atomic<uint32_t> routineFromNum{0};
+
+    /// Set by a client heartbeat marker while none of its screens is open; cleared on any disconnect.
+    std::atomic<bool> phoneIdle{false};
+
+    /// When the oldest held notify started waiting, valid while batchHeld is set.
+    uint32_t batchStartMs = 0;
+    bool batchHeld = false;
+
+    /// True when the pending fromNum bumps are all routine and may wait for the batch to fill or age.
+    bool holdNotifyForBatch(uint32_t pending, uint32_t routine);
+
   public:
     enum APIState {
         STATE_DISCONNECTED, // Initial state, no API is connected
@@ -114,6 +130,27 @@ class MeshService
     /// Called when some new packets have arrived from one of the radios
     Observable<uint32_t> fromNumChanged;
 
+    /// Heartbeat nonces carrying this tag in the top 16 bits tell us whether a client has a screen open: bit 0 set means
+    /// idle, clear means active. The low bits vary so the per-connection duplicate-write filter never drops a repeat.
+    /// Stock firmware treats them as plain heartbeats.
+    static constexpr uint32_t HEARTBEAT_PHONE_ACTIVITY_TAG = 0xBA7C0000;
+    static constexpr uint32_t HEARTBEAT_PHONE_ACTIVITY_MASK = 0xFFFF0000;
+    static constexpr uint32_t HEARTBEAT_PHONE_IDLE_BIT = 1;
+
+    /// Longest a routine packet waits for the phone while it is idle. RAM only: nothing is written to flash.
+    static constexpr uint32_t PHONE_BATCH_MAX_WAIT_MS = 60 * 1000;
+
+    /// While idle, routine packets for the phone are held for one notify per batch instead of one each, so a phone
+    /// asleep in a pocket wakes about once a minute on a busy mesh. Anything else, a half-full queue or the age
+    /// limit sends the whole batch at once.
+    void setPhoneIdle(bool idle) { phoneIdle = idle; }
+    bool isPhoneIdle() const { return phoneIdle; }
+
+    /// True for readings a phone only shows (positions, node info, telemetry, neighbor info, pax counts, map reports)
+    /// sent to someone other than us. Messages, routing/acks, admin, alerts, waypoints, traceroutes and anything
+    /// addressed to us are never held.
+    static bool isRoutineForPhone(const meshtastic_MeshPacket &p, NodeNum ourNode);
+
     /// Called when radio config has changed (radios should observe this and set their hardware as required)
     Observable<void *> configChanged;
 
@@ -123,6 +160,9 @@ class MeshService
 
     /// Do idle processing (mostly processing messages which have been queued from the radio)
     void loop();
+
+    /// Tells observers about new data for the phone, unless it is a batch of routine packets still allowed to wait.
+    void notifyClientsIfDue();
 
     /// Return the next packet destined to the phone.  FIXME, somehow use fromNum to allow the phone to retry the
     /// last few packets if needs to.
