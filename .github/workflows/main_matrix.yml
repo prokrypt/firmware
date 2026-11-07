@@ -671,6 +671,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  publish-fork-release:
+    # Fork: publish the draft once every arch zip is attached, so the Android app's updater (which can't see drafts)
+    # offers it. Skipped if any arch failed, leaving the draft for a manual look.
+    permissions: # Needed for 'gh release edit'.
+      contents: write
+    runs-on: ubuntu-26.04
+    if: >-
+      !cancelled() && needs.release-firmware.result == 'success' &&
+      github.repository_owner == 'prokrypt' &&
+      github.event_name == 'workflow_dispatch' && github.event.inputs.nightly != 'true'
+    needs: [release-firmware, version]
+    steps:
+      - name: Publish the GitHub release
+        run: gh release edit v${{ needs.version.outputs.long }} --repo ${{ github.repository }} --draft=false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   publish-firmware:
     runs-on: ubuntu-26.04
     if: github.repository_owner == 'meshtastic' && github.event_name == 'workflow_dispatch' && github.event.inputs.nightly != 'true'
