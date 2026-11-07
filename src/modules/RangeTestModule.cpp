@@ -11,6 +11,7 @@
 #include "configuration.h"
 #if !MESHTASTIC_EXCLUDE_RANGETEST && !MESHTASTIC_EXCLUDE_GPS
 #include "FSCommon.h"
+#include "FlashGuard.h"
 #include "MeshService.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
@@ -340,7 +341,7 @@ bool RangeTestModuleRadio::removeFile()
     }
 
     LOG_INFO("Deleting previous range test");
-    bool result = FSCom.remove("/static/rangetest.csv");
+    bool result = FlashGuard::noteWrite("/static/rangetest.csv") && FSCom.remove("/static/rangetest.csv");
 
     if (!result) {
         LOG_ERROR("Failed to delete range test");

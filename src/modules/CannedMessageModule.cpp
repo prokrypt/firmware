@@ -1138,15 +1138,7 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
     } else {
         sm.dest = dest;
         sm.type = MessageType::DM_TO_US;
-        // Only add as favorite if our role is not router-like (ROUTER, ROUTER_LATE, CLIENT_BASE)
-        if (config.device.role != meshtastic_Config_DeviceConfig_Role_ROUTER &&
-            config.device.role != meshtastic_Config_DeviceConfig_Role_ROUTER_LATE &&
-            config.device.role != meshtastic_Config_DeviceConfig_Role_CLIENT_BASE) {
-            LOG_INFO("Proactively adding 0x%08x as favorite node", dest);
-            nodeDB->set_favorite(true, dest);
-        } else {
-            LOG_DEBUG("Not favoriting node 0x%08x: router-like role", dest);
-        }
+        // Upstream auto-favorites the DM recipient (and saves nodes.proto); favorites are the user's choice here.
     }
     sm.ackStatus = AckStatus::NONE;
 

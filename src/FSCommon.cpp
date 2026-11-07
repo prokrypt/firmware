@@ -395,6 +395,8 @@ void listDir(const char *dirname, uint8_t levels, bool del)
 void rmDir(const char *dirname)
 {
 #ifdef FSCom
+    if (!FlashGuard::noteWrite(dirname))
+        return;
     listDir(dirname, 10, true);
 #endif
 }
