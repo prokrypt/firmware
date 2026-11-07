@@ -2428,7 +2428,7 @@ void menuHandler::rebootMenu()
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == 1) {
             IF_SCREEN(screen->showSimpleBanner("Rebooting...", 0));
-            nodeDB->saveToDisk();
+            // Power::reboot() saves for a user reboot; a save here would write nodes.proto twice.
             rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         } else {
             menuQueue = PowerMenu;
