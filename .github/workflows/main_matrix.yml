@@ -533,6 +533,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate fork release notes
+        id: fork_notes
+        if: github.repository_owner == 'prokrypt'
+        run: |
+          git fetch --no-tags https://github.com/meshtastic/firmware develop:refs/remotes/upstream/develop
+          {
+            echo "notes<<EOF"
+            .github/scripts/fork-release-notes.sh HEAD upstream/develop
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         id: create_release
@@ -542,7 +555,7 @@ jobs:
           name: ${{ github.repository_owner == 'meshtastic' && 'Meshtastic Firmware' || 'Firmware (no-auto-writes)' }} ${{ needs.version.outputs.long }} Alpha
           tag_name: v${{ needs.version.outputs.long }}
           target_commitish: ${{ github.sha }}
-          body: ${{ steps.release_notes.outputs.notes || format('Built from {0}@{1}.', github.ref_name, github.sha) }}
+          body: ${{ steps.release_notes.outputs.notes || steps.fork_notes.outputs.notes || format('Built from {0}@{1}.', github.ref_name, github.sha) }}
 
       - name: Download source deb
         if: github.repository_owner == 'meshtastic'
