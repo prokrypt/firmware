@@ -1393,26 +1393,7 @@ void AdminModule::handleSetChannel(const meshtastic_Channel &cc)
     if (channels.ensureLicensedOperation()) {
         warnLicensedMode();
     }
-    // Refresh derived state (primaryIndex in particular) BEFORE the precision clamp below. usesPublicKey()
-    // resolves a secondary channel's key against the primary, so it must see the post-update primaryIndex;
-    // running the clamp first could evaluate secondaries against the previous primary and skip the clamp/warning.
     channels.onConfigChanged(); // tell the radios about this change
-
-    // Persist the public-key precision clamp for all channels that may be affected (e.g. secondaries
-    // that inherit a now-public primary key) and warn the client once if anything was coarsened.
-    bool clamped = false;
-    for (uint8_t i = 0; i < channels.getNumChannels(); i++) {
-        meshtastic_Channel &ch = channels.getByIndex(i);
-        if (ch.role == meshtastic_Channel_Role_DISABLED || !ch.settings.has_module_settings)
-            continue;
-        uint32_t allowed = getPositionPrecisionForChannel(i);
-        if (allowed != ch.settings.module_settings.position_precision) {
-            ch.settings.module_settings.position_precision = allowed;
-            clamped = true;
-        }
-    }
-    if (clamped)
-        sendWarning(publicChannelPrecisionMessage);
     saveChanges(SEGMENT_CHANNELS, false);
     warnOnChannelSet(channels.getByIndex(cc.index)); // passes the saved channel
     // Inside an edit transaction the queued warnings are flushed once at commit; otherwise emit now.

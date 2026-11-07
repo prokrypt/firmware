@@ -10,10 +10,11 @@
 // 15 also matches the MQTT map-report public precision ceiling.
 #define MAX_POSITION_PRECISION_PUBLIC_KEY 15
 
-// Configured precision as-is; does NOT apply the public-key clamp -- use the channelIndex overload for the on-wire value.
+// Configured precision as-is (0 when the channel has no module settings).
 uint32_t getPositionPrecisionForChannel(const meshtastic_Channel &channel);
 
-// Configured precision, clamped to MAX_POSITION_PRECISION_PUBLIC_KEY when the channel's effective key is publicly decryptable.
+// On-wire precision for a channel index: 0 for event/disabled channels, otherwise the configured precision.
+// Fork: no public-key clamp, so precise position is allowed on public channels too.
 uint32_t getPositionPrecisionForChannel(uint8_t channelIndex);
 
 // The channel our position goes out on: the lowest index with a non-zero on-wire precision (disabled and event

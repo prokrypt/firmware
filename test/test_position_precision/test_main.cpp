@@ -125,7 +125,7 @@ static void test_getPositionPrecisionForChannel_secondaryWithoutModuleSettingsFa
 }
 
 // End-to-end via the channelIndex overload + live channels singleton, exercising getKey()'s 1-byte->16-byte expansion.
-static void test_getPositionPrecisionForChannel_clampsPreciseOnDefaultKeyChannel()
+static void test_getPositionPrecisionForChannel_keepsPreciseOnDefaultKeyChannel()
 {
     channels.initDefaults(); // channel 0: primary, default key (psk {0x01}) -> publicly decryptable
     uint8_t idx = 0;
@@ -135,7 +135,7 @@ static void test_getPositionPrecisionForChannel_clampsPreciseOnDefaultKeyChannel
     ch.settings.has_module_settings = true;
     ch.settings.module_settings.position_precision = 32; // user requests "Precise" on a public channel
 
-    TEST_ASSERT_EQUAL_UINT32(MAX_POSITION_PRECISION_PUBLIC_KEY, getPositionPrecisionForChannel(idx));
+    TEST_ASSERT_EQUAL_UINT32(32, getPositionPrecisionForChannel(idx)); // fork: no public-key clamp
 }
 
 static void test_getPositionPrecisionForChannel_keepsPreciseOnStrongKeyChannel()
@@ -465,7 +465,7 @@ void setup()
     RUN_TEST(test_getPositionPrecisionForChannel_explicitZeroDisablesPrimary);
     RUN_TEST(test_getPositionPrecisionForChannel_primaryWithoutModuleSettingsFailsClosed);
     RUN_TEST(test_getPositionPrecisionForChannel_secondaryWithoutModuleSettingsFailsClosed);
-    RUN_TEST(test_getPositionPrecisionForChannel_clampsPreciseOnDefaultKeyChannel);
+    RUN_TEST(test_getPositionPrecisionForChannel_keepsPreciseOnDefaultKeyChannel);
     RUN_TEST(test_getPositionPrecisionForChannel_keepsPreciseOnStrongKeyChannel);
     RUN_TEST(test_cryptoKeyIsPublic_openKeyIsPublic);
     RUN_TEST(test_cryptoKeyIsPublic_defaultKeyIsPublic);
