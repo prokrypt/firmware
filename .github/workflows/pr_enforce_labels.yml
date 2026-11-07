@@ -14,6 +14,8 @@ permissions:
 
 jobs:
   check-label:
+    # Upstream's release-notes labels; the prokrypt fork writes its notes with fork-release-notes.sh instead.
+    if: github.repository_owner != 'prokrypt'
     runs-on: ubuntu-slim
     steps:
       - name: Check for PR labels

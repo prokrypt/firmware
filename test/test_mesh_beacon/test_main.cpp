@@ -2336,6 +2336,7 @@ BEACON_TEST_ENTRY void setup()
 {
     delay(10);
     initializeTestEnvironment();
+    nodeDB = new NodeDB(); // AdminModule::saveChanges reaches nodeDB->saveToDisk, which reads NodeDB members
     UNITY_BEGIN();
 
     printf("\n=== AdminModule config validation ===\n");
