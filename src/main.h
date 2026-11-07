@@ -121,6 +121,10 @@ extern bool pauseBluetoothLogging;
 
 void nrf52Setup(), esp32Setup(), nrf52Loop(), esp32Loop(), rp2040Setup(), rp2040Loop(), clearBonds(), enterDfuMode(),
     nrf52FlashQuiesce(), stm32wlSetup();
+/// nRF52: flag the coming NVIC_SystemReset() as one we asked for, so the next boot skips the broadcast holdoff.
+void nrf52MarkIntentionalRestart();
+/// nRF52: true when this boot is a System OFF wake or a restart flagged by nrf52MarkIntentionalRestart().
+bool nrf52WokeIntentionally();
 #ifdef ARCH_ESP32
 void esp32ReleaseBluetoothMemoryIfUnused();
 #endif

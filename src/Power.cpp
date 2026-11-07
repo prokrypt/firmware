@@ -1074,6 +1074,8 @@ void Power::reboot()
 #if defined(ARCH_ESP32)
     ESP.restart();
 #elif defined(ARCH_NRF52)
+    if (rebootAtMsec != 0 && rebootAtMsec == userRebootAtMsec)
+        nrf52MarkIntentionalRestart();
     nrf52FlashQuiesce();
     NVIC_SystemReset();
 #elif defined(ARCH_RP2040)

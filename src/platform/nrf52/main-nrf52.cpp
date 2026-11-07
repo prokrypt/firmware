@@ -282,6 +282,9 @@ int printf(const char *fmt, ...)
 namespace
 {
 constexpr uint8_t NRF52_MAGIC_LFS_IS_CORRUPT = 0xF5;
+// Bootloader owns 0x4e/0x57/0x6d/0xA8 and clears only those; anything else survives the soft reset untouched.
+constexpr uint8_t NRF52_MAGIC_INTENTIONAL_RESTART = 0xB0;
+bool wokeIntentionally = false;
 constexpr uint32_t MULTIPLE_CORRUPTION_DELAY_MILLIS = 20 * 60 * 1000;
 // When the last format happened, not when the next one is due: measuring forward from the event
 // bounds the pause below by the constant, where a stored deadline could hand delay() any value.
@@ -460,6 +463,12 @@ void nrf52Setup()
     // per
     // https://infocenter.nordicsemi.com/index.jsp?topic=%2Fcom.nordic.infocenter.nrf52832.ps.v1.1%2Fpower.html
     LOG_DEBUG("Reset reason: 0x%x", why);
+    // A System OFF wake (button, LPCOMP) or a restart we flagged (user reboot, power-saving duty cycle) is not a
+    // reboot loop, so TransmitHistory's boot holdoff does not apply. The SoftDevice is not up yet: read GPREGRET directly.
+    const bool flagged = NRF_POWER->GPREGRET == NRF52_MAGIC_INTENTIONAL_RESTART;
+    if (flagged)
+        NRF_POWER->GPREGRET = 0;
+    wokeIntentionally = flagged || (why & (POWER_RESETREAS_OFF_Msk | POWER_RESETREAS_LPCOMP_Msk));
 
 #ifdef USE_SEMIHOSTING
     nrf52InitSemiHosting();
@@ -501,6 +510,19 @@ void nrf52Setup()
 
     r = nrfx_wdt_channel_alloc(&nrfx_wdt, &nrfx_wdt_channel_id_nrf52_main);
     assert(r == NRFX_SUCCESS);
+}
+
+void nrf52MarkIntentionalRestart()
+{
+    // SoftDevice first (it owns NRF_POWER while enabled), direct write when it is not running.
+    if (!(sd_power_gpregret_clr(0, 0xFF) == NRF_SUCCESS &&
+          sd_power_gpregret_set(0, NRF52_MAGIC_INTENTIONAL_RESTART) == NRF_SUCCESS))
+        NRF_POWER->GPREGRET = NRF52_MAGIC_INTENTIONAL_RESTART;
+}
+
+bool nrf52WokeIntentionally()
+{
+    return wokeIntentionally;
 }
 
 // Waits out any flash write another task has in flight, drains the shared page cache, and keeps
@@ -557,6 +579,7 @@ void cpuDeepSleep(uint32_t msecToWake)
          config.power.is_power_saving == true)) {
         sd_power_mode_set(NRF_POWER_MODE_LOWPWR);
         delay(msecToWake);
+        nrf52MarkIntentionalRestart(); // the duty-cycle wake is not a reboot loop
         NVIC_SystemReset();
     } else {
         // Resume on user button press

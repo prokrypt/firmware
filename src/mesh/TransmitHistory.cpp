@@ -3,6 +3,8 @@
 
 #ifdef ARCH_ESP32
 #include "sleep.h"
+#elif defined(ARCH_NRF52)
+#include "main.h"
 #endif
 
 TransmitHistory *transmitHistory = nullptr;
@@ -34,6 +36,8 @@ bool TransmitHistory::wokeFromDeepSleep() const
 #endif
 #ifdef ARCH_ESP32
     return wakeCause != ESP_SLEEP_WAKEUP_UNDEFINED;
+#elif defined(ARCH_NRF52)
+    return nrf52WokeIntentionally();
 #else
     return false;
 #endif
