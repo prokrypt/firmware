@@ -3,6 +3,10 @@
 
 #ifdef FSCom
 
+#ifdef ARCH_NRF52
+extern "C" volatile uint32_t flash_cache_flush_failures; // src/platform/nrf52/flash_cache_override.c
+#endif
+
 // Only way to work on both esp32 and nrf52
 static File openFile(const char *filename, bool fullAtomic)
 {
@@ -69,9 +73,21 @@ bool SafeFile::close()
     if (!f)
         return false;
 
+#ifdef ARCH_NRF52
+    const uint32_t flushFailuresBefore = flash_cache_flush_failures;
+#endif
     spiLock->lock();
     f.close();
     spiLock->unlock();
+
+#ifdef ARCH_NRF52
+    // close() flushes the page cache, which also carries LittleFS metadata the readback below never
+    // sees. A page that would not program is a torn file system in the making: fail the save.
+    if (flash_cache_flush_failures != flushFailuresBefore) {
+        LOG_ERROR("Flash page flush failed while closing %s", filename.c_str());
+        return false;
+    }
+#endif
 
     if (!testReadback())
         return false;
