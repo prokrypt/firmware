@@ -1132,7 +1132,8 @@ void Power::shutdown()
 #if !defined(ARCH_STM32WL)
     playShutdownMelody();
 #endif
-    saveForUserPowerOff(SEGMENT_CONFIG | SEGMENT_MODULECONFIG | SEGMENT_DEVICESTATE | SEGMENT_CHANNELS | SEGMENT_NODEDATABASE);
+    // Settings were saved when the user changed them (a failed one is retried inside); only gathered state is owed.
+    saveForUserPowerOff(SEGMENT_NODEDATABASE);
 #if defined(ARCH_NRF52) || defined(ARCH_ESP32) || defined(ARCH_RP2040) || defined(ARCH_STM32WL)
 #ifdef PIN_LED1
     ledOff(PIN_LED1);

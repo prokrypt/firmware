@@ -77,7 +77,7 @@ int SystemCommandsModule::handleInputEvent(const InputEvent *event)
         return 0;
     case INPUT_BROKER_MSG_REBOOT:
         IF_SCREEN(screen->showSimpleBanner("Rebooting...", 0));
-        nodeDB->saveToDisk();
+        // Power::reboot() saves for a user reboot; a save here would write nodes.proto twice.
         rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         // runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
         return true;
