@@ -447,6 +447,7 @@ void test_state_persistence()
 {
     TEST_MESSAGE("=== State persistence across restart ===");
     TEST_MESSAGE("Expectation: histogram entries survive instance teardown and reload.");
+    HopScalingModule::s_testEpoch = 1700000000u; // a save needs a clock, so the snapshot can be aged on load
 
     {
         auto shim = std::unique_ptr<HopScalingTestShim>(new HopScalingTestShim());
@@ -470,6 +471,7 @@ void test_state_persistence()
         TEST_ASSERT_GREATER_THAN_UINT8(0, shim->getEntryCount());
         hopScalingModule = nullptr;
     }
+    HopScalingModule::s_testEpoch = 0;
 }
 
 void test_hourly_roll()
