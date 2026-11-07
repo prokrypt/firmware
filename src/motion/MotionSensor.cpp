@@ -1,5 +1,6 @@
 #include "MotionSensor.h"
 #include "FSCommon.h"
+#include "FlashGuard.h"
 #include "SPILock.h"
 #include "SafeFile.h"
 #include "Throttle.h"
@@ -158,7 +159,10 @@ void MotionSensor::finishCalibrationIfExpired(bool &showingScreen, const char *f
     doCalibration = false;
     endCalibrationAt = 0;
     showingScreen = false;
-    saveMagnetometerCalibration(filePath, highestX, lowestX, highestY, lowestY, highestZ, lowestZ);
+    {
+        FlashGuard::Scope userWrite("compass calibration"); // the user started the calibration window
+        saveMagnetometerCalibration(filePath, highestX, lowestX, highestY, lowestY, highestZ, lowestZ);
+    }
 
 #if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
     if (screen) {

@@ -196,7 +196,14 @@ bool WaypointStore::addFromPacket(const meshtastic_MeshPacket &packet, bool loca
             break;
         }
 
-        removeWaypoint(entry.waypoint.id);
+        // A mesh delete is not a user action: drop it from RAM and let the next user save or
+        // shutdown save persist it (no-auto-writes).
+        if (removeWaypointById(entry.waypoint.id)) {
+#if ENABLE_WAYPOINT_PERSISTENCE
+            markWaypointStoreUnsaved();
+#endif
+            notifyChanged();
+        }
         return true;
     }
 

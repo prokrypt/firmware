@@ -204,21 +204,8 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
             // dispatch; by the time this Router-thread handler runs
             // that pointer is unrelated, so the path was unsafe.)
 
-            // Automatically favorite the node that is using the admin key
-            auto remoteNode = nodeDB->getMeshNode(mp.from);
-            if (remoteNode && !nodeInfoLiteIsFavorite(remoteNode)) {
-                if (config.device.role == meshtastic_Config_DeviceConfig_Role_CLIENT_BASE) {
-                    // Special case for CLIENT_BASE: is_favorite has special meaning, and we don't want to automatically set it
-                    // without the user doing so deliberately.
-                    LOG_INFO("PKC admin valid, not auto-favoriting node 0x%08x: role==CLIENT_BASE", mp.from);
-                } else {
-                    if (nodeDB->setProtectedFlag(remoteNode, NODEINFO_BITFIELD_IS_FAVORITE_MASK, true)) {
-                        LOG_INFO("PKC admin valid. Auto-favoriting node 0x%08x", mp.from);
-                    } else {
-                        LOG_WARN("PKC admin valid, but auto-favorite refused for node %x (protected-node cap)", mp.from);
-                    }
-                }
-            }
+            // Upstream auto-favorites the node using the admin key; favorites are the user's choice here
+            // (favorites-only key storage), and the admin key itself is what authorizes the sender.
         } else {
             myReply = allocErrorResponse(meshtastic_Routing_Error_ADMIN_PUBLIC_KEY_UNAUTHORIZED, &mp);
             LOG_INFO("PKC admin payload: sender public key doesn't match admin authorized key");

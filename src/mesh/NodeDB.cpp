@@ -2480,7 +2480,7 @@ void NodeDB::loadFromDisk()
     const char *eventProfileFiles[] = {EVENT_CONFIG_FILE_NAME, EVENT_CHANNEL_FILE_NAME, EVENT_BACKUP_FILE_NAME};
     spiLock->lock();
     for (const char *filename : eventProfileFiles) {
-        if (FSCom.exists(filename) && !FSCom.remove(filename))
+        if (FSCom.exists(filename) && FlashGuard::noteWrite(filename) && !FSCom.remove(filename))
             LOG_WARN("Can't remove stale event profile file %s", filename);
     }
     spiLock->unlock();
@@ -3783,6 +3783,7 @@ void NodeDB::addFromContact(meshtastic_SharedContact contact)
         }
     }
     info->num = contact.node_num;
+    const meshtastic_NodeInfoLite before = *info;
     // CopyUserToNodeInfoLite assigns public_key unconditionally, and clients send add_contact before every
     // DM - often from an entry that carries no key at all. A contact may still supply or update a full
     // 32-byte key (that's what add_contact is for), but it must never *erase* a key we already hold, which
@@ -3810,25 +3811,12 @@ void NodeDB::addFromContact(meshtastic_SharedContact contact)
          */
 
         /* "Boring old nodes" are the first to be evicted out of the node database when full. This includes a newly-zeroed
-         * nodeinfo because it has: !is_favorite && last_heard==0. To keep this from happening when we addFromContact, we set the
-         * new node as a favorite, and we leave last_heard alone (even if it's zero).
+         * nodeinfo because it has: !is_favorite && last_heard==0. Upstream auto-favorites the contact; here favorites are
+         * the user's choice (favorites-only key storage), so a non-favorite is stamped as heard now instead, for every
+         * role. A favorite is never evicted and must not look heard just because we sent it a DM.
          */
-        if (config.device.role == meshtastic_Config_DeviceConfig_Role_CLIENT_BASE) {
-            // Special case for CLIENT_BASE: is_favorite has special meaning, and we don't want to automatically set it
-            // without the user doing so deliberately. We don't normally expect users to use a CLIENT_BASE to send DMs or to add
-            // contacts, but we should make sure it doesn't auto-favorite in case they do. Instead, as a workaround, we'll
-            // stamp the contact as heard now, so that the add_contact node doesn't immediately get evicted.
+        if (!nodeInfoLiteIsFavorite(info))
             stampContactHeardNow(info);
-        } else {
-            // Normal case: set is_favorite to prevent expiration.
-            // last_heard will remain as-is (or remain 0 if this entry wasn't in the nodeDB).
-            // If the protected cap refuses the favorite, fall back to a heard-now stamp so the
-            // contact still isn't the first eviction victim.
-            if (!setProtectedFlag(info, NODEINFO_BITFIELD_IS_FAVORITE_MASK, true)) {
-                LOG_WARN(PROTECTED_CAP_WARN_FMT, "favorite", contact.node_num, MAX_NUM_NODES - 2);
-                stampContactHeardNow(info);
-            }
-        }
 
         // As the clients will begin sending the contact with DMs, we want to strictly check if the node is manually verified
         if (contact.manually_verified) {
@@ -3840,7 +3828,10 @@ void NodeDB::addFromContact(meshtastic_SharedContact contact)
         sortMeshDB();
         notifyObservers(true); // Force an update whether or not our node counts have changed
     }
-    saveNodeDatabaseToDisk();
+    // Clients send add_contact before every DM. Only a favorite (whose key is stored) or an ignore
+    // (which must survive reboot) has anything on disk to update, and only when something changed.
+    if ((contact.should_ignore || nodeInfoLiteIsFavorite(info)) && memcmp(&before, info, sizeof(before)) != 0)
+        saveNodeDatabaseToDisk();
 }
 
 /** Update user info and channel for this node based on received user data

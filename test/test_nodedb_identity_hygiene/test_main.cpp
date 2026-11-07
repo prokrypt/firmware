@@ -11,6 +11,7 @@
 #endif
 
 #include "FSCommon.h"
+#include "FlashGuard.h"
 #include "SPILock.h"
 #include "mesh/NodeDB.h"
 #include "support/MockMeshService.h"
@@ -124,7 +125,37 @@ static void test_contact_keyless_preserves_stored_key(void)
     assertStoredKeyEquals(kPeer, 0x42);
     const meshtastic_NodeInfoLite *info = db->getMeshNode(kPeer);
     TEST_ASSERT_EQUAL_STRING("Alice", info->long_name); // merge still applied
-    TEST_ASSERT_TRUE(nodeInfoLiteIsFavorite(info));     // anti-eviction stamp for normal roles
+    TEST_ASSERT_FALSE(nodeInfoLiteIsFavorite(info));    // favorites are the user's choice
+    TEST_ASSERT_NOT_EQUAL(1000, info->last_heard);      // anti-eviction heard-now stamp instead
+}
+
+// A pre-DM contact for a node the user never favorited has nothing on disk to update: no flash write.
+static void test_contact_non_favorite_does_not_write_flash(void)
+{
+    fillKey(owner.public_key, 0x5A); // otherwise saveNodeDatabaseToDisk() is skipped for a keyless device
+    db->push(kPeer, 1000, /*keySeed=*/0x42);
+    const uint32_t writesBefore = FlashGuard::writesSinceBoot();
+
+    db->addFromContact(makeContact(kPeer, "Alice", "AL", /*keySeed=*/0x77));
+
+    assertStoredKeyEquals(kPeer, 0x77); // RAM takes the key
+    TEST_ASSERT_EQUAL(writesBefore, FlashGuard::writesSinceBoot());
+}
+
+// A favorite's key is stored, so a contact that changes it is saved; a repeat of the same contact is not.
+static void test_contact_favorite_writes_once_per_change(void)
+{
+    fillKey(owner.public_key, 0x5A);
+    db->push(kPeer, 1000, /*keySeed=*/0x42);
+    nodeInfoLiteSetBit(db->getMeshNode(kPeer), NODEINFO_BITFIELD_IS_FAVORITE_MASK, true);
+
+    uint32_t writesBefore = FlashGuard::writesSinceBoot();
+    db->addFromContact(makeContact(kPeer, "Alice", "AL", /*keySeed=*/0x77));
+    TEST_ASSERT_GREATER_THAN(writesBefore, FlashGuard::writesSinceBoot());
+
+    writesBefore = FlashGuard::writesSinceBoot();
+    db->addFromContact(makeContact(kPeer, "Alice", "AL", /*keySeed=*/0x77));
+    TEST_ASSERT_EQUAL(writesBefore, FlashGuard::writesSinceBoot());
 }
 
 // The guard blocks erasure, not update: a contact carrying a different valid
@@ -149,8 +180,8 @@ static void test_contact_verified_pin_blocks_mismatched_key(void)
 
     assertStoredKeyEquals(kPeer, 0x42);
     const meshtastic_NodeInfoLite *info = db->getMeshNode(kPeer);
-    TEST_ASSERT_EQUAL_STRING("", info->long_name);   // refused wholesale, not just the key
-    TEST_ASSERT_FALSE(nodeInfoLiteIsFavorite(info)); // returned before the favorite stamp
+    TEST_ASSERT_EQUAL_STRING("", info->long_name); // refused wholesale, not just the key
+    TEST_ASSERT_EQUAL(1000, info->last_heard);     // returned before the heard-now stamp
     TEST_ASSERT_TRUE(nodeInfoLiteIsKeyManuallyVerified(info));
 }
 
@@ -470,6 +501,9 @@ static void test_contact_key_guard_survives_reboot(void)
     // saveNodeDatabaseToDisk() skips keyless devices, so give ourselves a key.
     fillKey(owner.public_key, 0x5A);
 
+    // Favorites-only storage: only a favorite's key reaches flash, so favorite the peer as the user would.
+    db->push(kPeer, 1000);
+    nodeInfoLiteSetBit(db->getMeshNode(kPeer), NODEINFO_BITFIELD_IS_FAVORITE_MASK, true);
     meshtastic_SharedContact keyed = makeContact(kPeer, "Alice", "AL", /*keySeed=*/0x42);
     keyed.manually_verified = true;
     db->addFromContact(keyed); // persists
@@ -545,6 +579,8 @@ IH_TEST_ENTRY void setup()
 
     printf("\n=== addFromContact guards ===\n");
     RUN_TEST(test_contact_keyless_preserves_stored_key);
+    RUN_TEST(test_contact_non_favorite_does_not_write_flash);
+    RUN_TEST(test_contact_favorite_writes_once_per_change);
     RUN_TEST(test_contact_new_key_updates_stored_key);
     RUN_TEST(test_contact_verified_pin_blocks_mismatched_key);
     RUN_TEST(test_contact_verified_pin_blocks_keyless_unverified);
