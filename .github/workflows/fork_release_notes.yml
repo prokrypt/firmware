@@ -1,0 +1,43 @@
+# prokrypt fork only: rewrites the notes of every existing fork release (drafts included) with
+# .github/scripts/fork-release-notes.sh. New releases get notes from main_matrix.yml.
+name: Fork release notes
+
+on:
+  workflow_dispatch:
+  # Also on merge: workflow_dispatch only lists workflows on the default branch (master), and this lives on no-auto-writes.
+  push:
+    branches: [no-auto-writes]
+    paths:
+      - .github/scripts/fork-release-notes.sh
+      - .github/workflows/fork_release_notes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite:
+    if: github.repository_owner == 'prokrypt'
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Rewrite release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --no-tags https://github.com/meshtastic/firmware develop:refs/remotes/upstream/develop
+          gh release list --limit 100 --json tagName -q '.[].tagName' | while read -r tag; do
+            # Drafts have no git tag yet; their target commit is the build's SHA.
+            target=$(gh release view "$tag" --json targetCommitish -q .targetCommitish)
+            git rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null && target="refs/tags/$tag"
+            if ! git cat-file -e "$target^{commit}" 2>/dev/null; then
+              echo "::warning::$tag: target $target not in history, skipped"
+              continue
+            fi
+            .github/scripts/fork-release-notes.sh "$target" upstream/develop > notes.md
+            gh release edit "$tag" --notes-file notes.md
+            echo "Rewrote $tag"
+          done
