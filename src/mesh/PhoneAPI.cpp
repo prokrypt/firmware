@@ -405,6 +405,9 @@ void PhoneAPI::close()
         packetForPhone = NULL;
         releaseFilesManifest(filesManifest);
         lastPortNumToRadio.clear();
+        // A client that went away cannot say it is back, so never leave the next one batched.
+        if (service)
+            service->setPhoneIdle(false);
         fromRadioNum = 0;
         config_nonce = 0;
         config_state = 0;
@@ -513,7 +516,13 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
             // `src/mesh/api/PacketAPI.cpp:74-79` for serial clients.
             // Default nonce (0) remains a plain keepalive that triggers
             // a queue-status reply.
-            if (toRadioScratch.heartbeat.nonce == 1) {
+            if ((toRadioScratch.heartbeat.nonce & MeshService::HEARTBEAT_PHONE_ACTIVITY_MASK) ==
+                MeshService::HEARTBEAT_PHONE_ACTIVITY_TAG) {
+                // Not a keepalive, so no queue-status reply: an idle phone should not be woken for it.
+                const bool idle = (toRadioScratch.heartbeat.nonce & MeshService::HEARTBEAT_PHONE_IDLE_BIT) != 0;
+                LOG_DEBUG("Client %s: routine packets %s", idle ? "idle" : "active", idle ? "batched" : "sent at once");
+                service->setPhoneIdle(idle);
+            } else if (toRadioScratch.heartbeat.nonce == 1) {
                 if (nodeInfoModule) {
                     LOG_INFO("Broadcast nodeinfo ping (serial)");
                     nodeInfoModule->sendOurNodeInfo(NODENUM_BROADCAST, true, 0, true);

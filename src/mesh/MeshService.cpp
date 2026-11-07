@@ -11,6 +11,7 @@
 #include "NodeDB.h"
 #include "Power.h"
 #include "PowerFSM.h"
+#include "Throttle.h"
 #include "TypeConversions.h"
 #include "UptimeClock.h"
 #include "gps/GPSLog.h"
@@ -141,16 +142,73 @@ void MeshService::loop()
         if (qs.free != lastQueueStatus.free)
             (void)sendQueueStatusToPhone(qs, 0, 0);
     }
+    notifyClientsIfDue();
+}
+
+void MeshService::notifyClientsIfDue()
+{
     if (oldFromNum != fromNum) { // We don't want to generate extra notifies for multiple new packets
         // Snapshot both first: the identity move can run on another task, and anything it bumps during
         // the pass must still be pending afterwards rather than being marked delivered.
         const uint32_t num = fromNum;
+        const uint32_t routine = routineFromNum; // after fromNum, see routineFromNum
+        if (batchAlreadyRead(num - oldFromNum, routine)) {
+            // The idle phone read the batch on its own poll (it drains after every heartbeat): a notify now
+            // would only wake it to find the queue empty.
+            oldFromNum = num;
+            routineFromNum -= routine;
+            batchHeld = false;
+            return;
+        }
+        if (holdNotifyForBatch(num - oldFromNum, routine))
+            return;
         const uint32_t generation = identityGeneration;
         int result = fromNumChanged.notifyObservers(num);
         if (result == 0) { // If any observer returns non-zero, we will try again
             oldFromNum = num;
             identityGenerationSeen = generation;
+            routineFromNum -= routine;
+            batchHeld = false;
         }
+    }
+}
+
+bool MeshService::batchAlreadyRead(uint32_t pending, uint32_t routine)
+{
+    return phoneIdle && routine >= pending && toPhoneQueue.numUsed() == 0;
+}
+
+bool MeshService::holdNotifyForBatch(uint32_t pending, uint32_t routine)
+{
+    if (!phoneIdle || routine < pending) // not batching, or something other than readings is waiting
+        return false;
+    if (toPhoneQueue.numUsed() >= MAX_RX_TOPHONE / 2) // leave room so a busy minute never overflows the queue
+        return false;
+    if (!batchHeld) {
+        batchHeld = true;
+        batchStartMs = millis();
+    }
+    return !Throttle::hasElapsed(batchStartMs, PHONE_BATCH_MAX_WAIT_MS);
+}
+
+bool MeshService::isRoutineForPhone(const meshtastic_MeshPacket &p, NodeNum ourNode)
+{
+    // Ciphertext we hold no key for: nothing the phone can act on. decoded.portnum aliases
+    // encrypted.size in the union, so it is never read here.
+    if (p.which_payload_variant != meshtastic_MeshPacket_decoded_tag)
+        return true;
+    if (p.to == ourNode)
+        return false;
+    switch (p.decoded.portnum) {
+    case meshtastic_PortNum_POSITION_APP:
+    case meshtastic_PortNum_NODEINFO_APP:
+    case meshtastic_PortNum_TELEMETRY_APP:
+    case meshtastic_PortNum_NEIGHBORINFO_APP:
+    case meshtastic_PortNum_PAXCOUNTER_APP:
+    case meshtastic_PortNum_MAP_REPORT_APP:
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -527,12 +585,16 @@ void MeshService::sendToPhone(meshtastic_MeshPacket *p)
         }
     }
 
+    // Classify before the enqueue: once queued, the phone may dequeue and release it at any time.
+    const bool routine = isRoutineForPhone(*p, nodeDB->getNodeNum());
     if (toPhoneQueue.enqueue(p, 0) == false) {
         LOG_CRIT("Queue to toPhoneQueue failed");
         releaseToPool(p);
         fromNum++; // notify observers so phone can resync
         return;
     }
+    if (routine)
+        routineFromNum++; // before fromNum, see routineFromNum
     fromNum++;
 }
 
