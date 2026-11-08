@@ -755,9 +755,9 @@ void test_nodes_since_cutoff_math()
 {
     const uint32_t now = 1800000000u;
     TEST_ASSERT_EQUAL_UINT32(now - 30 * 60 - PhoneAPI::kReplaySinceMarginSecs, PhoneAPI::nodesSinceCutoff(30, now));
-    TEST_ASSERT_EQUAL_UINT32(0u, PhoneAPI::nodesSinceCutoff(30, 0));    // no trusted clock: full list
-    TEST_ASSERT_EQUAL_UINT32(0u, PhoneAPI::nodesSinceCutoff(30, 1234)); // boot-relative clock: full list
-    TEST_ASSERT_FALSE(PhoneAPI::skipNodeInfo(true, false, 1, now));     // own node always
+    TEST_ASSERT_EQUAL_UINT32(0u, PhoneAPI::nodesSinceCutoff(30, 0));      // no trusted clock: full list
+    TEST_ASSERT_EQUAL_UINT32(0u, PhoneAPI::nodesSinceCutoff(30, 1234));   // boot-relative clock: full list
+    TEST_ASSERT_FALSE(PhoneAPI::skipNodeInfo(true, false, 1, now));       // own node always
     TEST_ASSERT_FALSE(PhoneAPI::skipNodeInfo(false, true, now - 9, now)); // favorite always
     TEST_ASSERT_TRUE(PhoneAPI::skipNodeInfo(false, false, now - 9, now));
     TEST_ASSERT_FALSE(PhoneAPI::skipNodeInfo(false, false, now + 9, now));
