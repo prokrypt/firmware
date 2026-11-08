@@ -11,6 +11,7 @@
 #include "NodeDB.h"
 #include "PhoneAPI.h"
 #include "Router.h"
+#include "gps/RTC.h"
 #include "mesh-pb-constants.h"
 #include "meshtastic/admin.pb.h"
 #include <cstdio>
@@ -686,6 +687,91 @@ void tearDown(void)
 }
 
 // Post-sync replay cutoff: unchanged nodes are not replayed to the next session.
+void sendNodesSinceHeartbeat(uint16_t ageMinutes)
+{
+    meshtastic_ToRadio hb = meshtastic_ToRadio_init_zero;
+    hb.which_payload_variant = meshtastic_ToRadio_heartbeat_tag;
+    hb.heartbeat.nonce = MeshService::HEARTBEAT_NODES_SINCE_TAG | ageMinutes;
+    sendToRadio(hb);
+}
+
+// Seeds A (heard 2 h ago) and B (heard 1 min ago) and returns the trusted clock the cutoff is computed from.
+uint32_t seedOldAndFreshNodes()
+{
+    seedRemoteNode(SEEDED_NODE_A);
+    seedRemoteNode(SEEDED_NODE_B);
+    const uint32_t now = getValidTime(RTCQualityFromNet);
+    TEST_ASSERT_GREATER_THAN_UINT32(PhoneAPI::kMinPlausibleEpoch, now);
+    nodeDB->getMeshNode(SEEDED_NODE_A)->last_heard = now - 2 * 3600;
+    nodeDB->getMeshNode(SEEDED_NODE_B)->last_heard = now - 60;
+    return now;
+}
+
+// A nodes-since heartbeat trims the next nodes-only dump to nodes heard since the client's last sync.
+void test_nodes_since_heartbeat_trims_nodes_only_dump()
+{
+    seedOldAndFreshNodes();
+    sendNodesSinceHeartbeat(30); // last sync 30 min ago: A (2 h) is skipped, B (1 min) goes out
+    startHandshake(SPECIAL_NONCE_ONLY_NODES);
+
+    DumpTranscript t;
+    TEST_ASSERT_TRUE(drainUntilComplete(t));
+    TEST_ASSERT_EQUAL_UINT(2, t.nodeNums.size());
+    TEST_ASSERT_EQUAL_UINT32(nodeDB->getNodeNum(), t.nodeNums[0]);
+    TEST_ASSERT_EQUAL_UINT32(SEEDED_NODE_B, t.nodeNums[1]);
+    TEST_ASSERT_EQUAL_UINT32(SPECIAL_NONCE_ONLY_NODES, t.completeId);
+}
+
+// Favorites always go out, however long ago they were heard.
+void test_nodes_since_keeps_favorites()
+{
+    seedOldAndFreshNodes();
+    TEST_ASSERT_TRUE(nodeDB->set_favorite(true, SEEDED_NODE_A));
+    sendNodesSinceHeartbeat(30);
+    startHandshake(SPECIAL_NONCE_ONLY_NODES);
+
+    DumpTranscript t;
+    TEST_ASSERT_TRUE(drainUntilComplete(t));
+    TEST_ASSERT_EQUAL_UINT(3, t.nodeNums.size());
+}
+
+// The heartbeat arms one nodes-only request: the next one, or one of another kind, gets the full list.
+void test_nodes_since_is_one_shot_and_nodes_only()
+{
+    seedOldAndFreshNodes();
+    sendNodesSinceHeartbeat(30);
+    startHandshake(FULL_DUMP_NONCE); // not nodes-only: full dump, and the request is consumed
+    DumpTranscript full;
+    TEST_ASSERT_TRUE(drainUntilComplete(full));
+    TEST_ASSERT_EQUAL_UINT(3, full.nodeNums.size());
+
+    startHandshake(SPECIAL_NONCE_ONLY_NODES);
+    DumpTranscript again;
+    TEST_ASSERT_TRUE(drainUntilComplete(again));
+    TEST_ASSERT_EQUAL_UINT(3, again.nodeNums.size());
+}
+
+void test_nodes_since_cutoff_math()
+{
+    const uint32_t now = 1800000000u;
+    TEST_ASSERT_EQUAL_UINT32(now - 30 * 60 - PhoneAPI::kReplaySinceMarginSecs, PhoneAPI::nodesSinceCutoff(30, now));
+    TEST_ASSERT_EQUAL_UINT32(0u, PhoneAPI::nodesSinceCutoff(30, 0));      // no trusted clock: full list
+    TEST_ASSERT_EQUAL_UINT32(0u, PhoneAPI::nodesSinceCutoff(30, 1234));   // boot-relative clock: full list
+    TEST_ASSERT_FALSE(PhoneAPI::skipNodeInfo(true, false, 1, now));       // own node always
+    TEST_ASSERT_FALSE(PhoneAPI::skipNodeInfo(false, true, now - 9, now)); // favorite always
+    TEST_ASSERT_TRUE(PhoneAPI::skipNodeInfo(false, false, now - 9, now));
+    TEST_ASSERT_FALSE(PhoneAPI::skipNodeInfo(false, false, now + 9, now));
+    TEST_ASSERT_FALSE(PhoneAPI::skipNodeInfo(false, false, now - 9, 0)); // no cutoff
+    TEST_ASSERT_TRUE(PhoneAPI::nodesSinceFresh(1000, 1000 + PhoneAPI::kNodesSinceArmWindowMs));
+    TEST_ASSERT_FALSE(PhoneAPI::nodesSinceFresh(1000, 1001 + PhoneAPI::kNodesSinceArmWindowMs));
+    TEST_ASSERT_TRUE(PhoneAPI::nodesSinceFresh(0xFFFFFF00u, 0x00000010u)); // millis wrapped
+    // Replay: the client's cutoff, unless an earlier session's replay never drained.
+    TEST_ASSERT_EQUAL_UINT32(now, PhoneAPI::replayCutoffFor(now, 0));
+    TEST_ASSERT_EQUAL_UINT32(now, PhoneAPI::replayCutoffFor(0, now));
+    TEST_ASSERT_EQUAL_UINT32(now - 100, PhoneAPI::replayCutoffFor(now, now - 100));
+    TEST_ASSERT_EQUAL_UINT32(now - 100, PhoneAPI::replayCutoffFor(now - 100, now));
+}
+
 void test_replay_cutoff_skips_only_nodes_already_delivered()
 {
     const uint32_t since = PhoneAPI::kMinPlausibleEpoch + 1000000;
@@ -731,6 +817,10 @@ void setup()
     printf("\n=== replay cutoff ===\n");
     RUN_TEST(test_replay_cutoff_skips_only_nodes_already_delivered);
     RUN_TEST(test_replay_cutoff_advances_only_after_a_drained_replay);
+    RUN_TEST(test_nodes_since_heartbeat_trims_nodes_only_dump);
+    RUN_TEST(test_nodes_since_keeps_favorites);
+    RUN_TEST(test_nodes_since_is_one_shot_and_nodes_only);
+    RUN_TEST(test_nodes_since_cutoff_math);
 
     exit(UNITY_END());
 }

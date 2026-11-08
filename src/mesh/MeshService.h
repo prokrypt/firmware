@@ -139,6 +139,8 @@ class MeshService
     static constexpr uint32_t HEARTBEAT_PHONE_ACTIVITY_TAG = 0xBA7C0000;
     static constexpr uint32_t HEARTBEAT_PHONE_ACTIVITY_MASK = 0xFFFF0000;
     static constexpr uint32_t HEARTBEAT_PHONE_IDLE_BIT = 1;
+    // Fork: low 16 bits = minutes since this client's last node sync (see PhoneAPI nodesSince).
+    static constexpr uint32_t HEARTBEAT_NODES_SINCE_TAG = 0xBA7D0000;
 
     /// Longest a routine packet waits for the phone while it is idle. RAM only: nothing is written to flash.
     static constexpr uint32_t PHONE_BATCH_MAX_WAIT_MS = 60 * 1000;
