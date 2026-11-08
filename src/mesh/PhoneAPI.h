@@ -130,10 +130,11 @@ class PhoneAPI
     // synced; the next SPECIAL_NONCE_ONLY_NODES request then skips non-favorite nodes not heard since. One-shot.
     bool nodesSincePending = false;
     uint16_t nodesSinceAgeMinutes = 0;
+    uint32_t nodesSinceArmedMs = 0;
     // Cutoff of the running nodes-since sync (0 = full); overrides replaySince for this sync's replay.
     uint32_t nodesSince = 0;
 
-    uint32_t replayCutoff() const { return nodesSince ? nodesSince : replaySince; }
+    uint32_t replayCutoff() const { return replayCutoffFor(nodesSince, replaySince); }
 
     meshtastic_ToRadio toRadioScratch = {
         0}; // this is a static scratch object, any data must be copied elsewhere before returning
@@ -168,6 +169,20 @@ class PhoneAPI
         if (validNow < kMinPlausibleEpoch + back)
             return 0; // no trusted clock: send everything
         return validNow - back;
+    }
+
+    /// The marker arms only the request that follows it; a stray one (reordered write, dropped request) must not trim
+    /// a later refresh that expects the full list.
+    static constexpr uint32_t kNodesSinceArmWindowMs = 15 * 1000;
+    static bool nodesSinceFresh(uint32_t armedMs, uint32_t nowMs) { return nowMs - armedMs <= kNodesSinceArmWindowMs; }
+
+    /// Replay cutoff for a sync: the client's own cutoff, held back to the last drained replay so records a dropped
+    /// link lost mid-replay go out again.
+    static uint32_t replayCutoffFor(uint32_t nodesSince, uint32_t replaySince)
+    {
+        if (!nodesSince || !replaySince)
+            return nodesSince ? nodesSince : replaySince;
+        return nodesSince < replaySince ? nodesSince : replaySince;
     }
 
     /// A nodes-since sync leaves out other nodes the client already has; favorites always go out.

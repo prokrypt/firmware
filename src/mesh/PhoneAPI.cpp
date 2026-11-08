@@ -302,9 +302,9 @@ void PhoneAPI::handleStartConfig()
     // Allow subclasses to prepare for high-throughput config traffic
     onConfigStart();
 
-    nodesSince = (nodesSincePending && config_nonce == SPECIAL_NONCE_ONLY_NODES)
-                     ? nodesSinceCutoff(nodesSinceAgeMinutes, getValidTime(RTCQualityFromNet))
-                     : 0;
+    const bool trimNodes =
+        nodesSincePending && config_nonce == SPECIAL_NONCE_ONLY_NODES && nodesSinceFresh(nodesSinceArmedMs, millis());
+    nodesSince = trimNodes ? nodesSinceCutoff(nodesSinceAgeMinutes, getValidTime(RTCQualityFromNet)) : 0;
     nodesSincePending = false;
     if (nodesSince)
         LOG_INFO("Client wants nodes heard after %u", nodesSince);
@@ -537,6 +537,7 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
                        MeshService::HEARTBEAT_NODES_SINCE_TAG) {
                 // Fork: arms the next nodes-only request; stock firmware treats this as a plain keepalive.
                 nodesSinceAgeMinutes = (uint16_t)(toRadioScratch.heartbeat.nonce & 0xFFFF);
+                nodesSinceArmedMs = millis();
                 nodesSincePending = true;
             } else if (toRadioScratch.heartbeat.nonce == 1) {
                 if (nodeInfoModule) {

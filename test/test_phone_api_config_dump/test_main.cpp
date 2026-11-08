@@ -762,6 +762,14 @@ void test_nodes_since_cutoff_math()
     TEST_ASSERT_TRUE(PhoneAPI::skipNodeInfo(false, false, now - 9, now));
     TEST_ASSERT_FALSE(PhoneAPI::skipNodeInfo(false, false, now + 9, now));
     TEST_ASSERT_FALSE(PhoneAPI::skipNodeInfo(false, false, now - 9, 0)); // no cutoff
+    TEST_ASSERT_TRUE(PhoneAPI::nodesSinceFresh(1000, 1000 + PhoneAPI::kNodesSinceArmWindowMs));
+    TEST_ASSERT_FALSE(PhoneAPI::nodesSinceFresh(1000, 1001 + PhoneAPI::kNodesSinceArmWindowMs));
+    TEST_ASSERT_TRUE(PhoneAPI::nodesSinceFresh(0xFFFFFF00u, 0x00000010u)); // millis wrapped
+    // Replay: the client's cutoff, unless an earlier session's replay never drained.
+    TEST_ASSERT_EQUAL_UINT32(now, PhoneAPI::replayCutoffFor(now, 0));
+    TEST_ASSERT_EQUAL_UINT32(now, PhoneAPI::replayCutoffFor(0, now));
+    TEST_ASSERT_EQUAL_UINT32(now - 100, PhoneAPI::replayCutoffFor(now, now - 100));
+    TEST_ASSERT_EQUAL_UINT32(now - 100, PhoneAPI::replayCutoffFor(now - 100, now));
 }
 
 void test_replay_cutoff_skips_only_nodes_already_delivered()
