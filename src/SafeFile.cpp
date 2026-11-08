@@ -14,6 +14,9 @@ static File openFile(const char *filename, bool fullAtomic)
         return File();
     concurrency::LockGuard g(spiLock);
     LOG_DEBUG("Opening %s, fullAtomic=%d", filename, fullAtomic);
+#ifdef HAPTIC_FEEDBACK_PIN
+    digitalWrite(HAPTIC_FEEDBACK_PIN, LOW); // the write stalls the loop that would end a haptic pulse
+#endif
     if (!fullAtomic) {
         FSCom.remove(filename); // Nuke the old file to make space (ignore if it !exists)
     }
