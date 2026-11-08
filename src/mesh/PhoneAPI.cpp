@@ -386,6 +386,8 @@ void PhoneAPI::close()
         onConnectionChanged(false);
         fromRadioScratch = {};
         toRadioScratch = {};
+        replaySince = nextReplaySince(replaySince, replayDrained, getValidTime(RTCQualityFromNet));
+        replayDrained = false;
         // Clear cached node info under lock because NimBLE callbacks can still be draining it.
         {
             concurrency::LockGuard guard(&nodeInfoMutex);
@@ -1155,6 +1157,8 @@ void PhoneAPI::sendConfigComplete()
     config_nonce = 0;
     state = STATE_SEND_PACKETS;
     replayPhase = shouldReplaySatellites ? REPLAY_PHASE_POSITIONS : REPLAY_PHASE_IDLE;
+    if (shouldReplaySatellites)
+        replayDrained = false;
     if (api_type == TYPE_BLE) {
         service->api_state = service->STATE_BLE;
     } else if (api_type == TYPE_WIFI) {
@@ -1381,7 +1385,8 @@ void PhoneAPI::beginReplayPositions()
     // got our position bundled in STATE_SEND_OWN_NODEINFO.
     replayPositionOrder = nodeDB->snapshotPositionNodeNums(nodeDB->getNodeNum());
     replayPositionIndex = 0;
-    LOG_INFO("Begin position replay: %u entries millis=%u", (unsigned)replayPositionOrder.size(), millis());
+    LOG_INFO("Begin position replay: %u entries, nodes heard after %u, millis=%u", (unsigned)replayPositionOrder.size(),
+             replaySince, millis());
 #endif
 }
 
@@ -1401,7 +1406,7 @@ void PhoneAPI::prefetchReplayPositions()
             meshtastic_PositionLite pos;
             // No header means an orphan the phone cannot attribute; a failed copy means
             // the entry was evicted between snapshot and now.
-            if (!header || !nodeDB->copyNodePosition(num, pos))
+            if (!header || replayAlreadyDelivered(header->last_heard, replaySince) || !nodeDB->copyNodePosition(num, pos))
                 continue;
             replayQueue.push_back(makeReplayPositionPacket(header, pos));
             added = true;
@@ -1438,7 +1443,7 @@ void PhoneAPI::prefetchReplayTelemetry()
             NodeNum num = replayTelemetryOrder[replayTelemetryIndex++];
             const meshtastic_NodeInfoLite *header = nodeDB->getMeshNode(num);
             meshtastic_DeviceMetrics dm;
-            if (!header || !nodeDB->copyNodeTelemetry(num, dm))
+            if (!header || replayAlreadyDelivered(header->last_heard, replaySince) || !nodeDB->copyNodeTelemetry(num, dm))
                 continue;
             replayQueue.push_back(makeReplayTelemetryPacket(header, dm));
             added = true;
@@ -1505,7 +1510,7 @@ void PhoneAPI::prefetchReplayEnvironment()
             NodeNum num = replayEnvironmentOrder[replayEnvironmentIndex++];
             const meshtastic_NodeInfoLite *header = nodeDB->getMeshNode(num);
             meshtastic_EnvironmentMetrics env;
-            if (!header || !nodeDB->copyNodeEnvironment(num, env))
+            if (!header || replayAlreadyDelivered(header->last_heard, replaySince) || !nodeDB->copyNodeEnvironment(num, env))
                 continue;
             replayQueue.push_back(makeReplayEnvironmentPacket(header, env));
             added = true;
@@ -1568,7 +1573,8 @@ void PhoneAPI::prefetchReplayStatus()
             NodeNum num = replayStatusOrder[replayStatusIndex++];
             const meshtastic_NodeInfoLite *header = nodeDB->getMeshNode(num);
             meshtastic_StatusMessage status;
-            if (!header || !nodeDB->copyNodeStatus(num, status) || status.status[0] == '\0')
+            if (!header || replayAlreadyDelivered(header->last_heard, replaySince) || !nodeDB->copyNodeStatus(num, status) ||
+                status.status[0] == '\0')
                 continue;
             replayQueue.push_back(makeReplayStatusPacket(header, status));
             added = true;
@@ -1661,6 +1667,7 @@ void PhoneAPI::advanceReplayPhase()
         replayEnvironmentIndex = 0;
         replayStatusIndex = 0;
         replayPhase = REPLAY_PHASE_IDLE;
+        replayDrained = true;
         break;
     default:
         break;

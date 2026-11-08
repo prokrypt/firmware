@@ -122,6 +122,10 @@ class PhoneAPI
     size_t replayEnvironmentIndex = 0;
     size_t replayStatusIndex = 0;
     ReplayPhase replayPhase = REPLAY_PHASE_IDLE; // armed by sendConfigComplete() for full/default sync
+    // Post-sync replay sends only nodes heard after this epoch (0 = all). RAM only: a reboot replays everything.
+    // shortcut: one cutoff per PhoneAPI (one for all BLE phones), so a second phone misses older records until a reboot.
+    uint32_t replaySince = 0;
+    bool replayDrained = false; // this session's replay reached the end
 
     meshtastic_ToRadio toRadioScratch = {
         0}; // this is a static scratch object, any data must be copied elsewhere before returning
@@ -138,6 +142,27 @@ class PhoneAPI
     void fillMyInfo();
 
   public:
+    /// Records changed this close to the end of a session are replayed again: they may still have been queued.
+    static constexpr uint32_t kReplaySinceMarginSecs = 300;
+    /// Below this, a time is boot-relative seconds, not an epoch (2020-01-01).
+    static constexpr uint32_t kMinPlausibleEpoch = 1577836800u;
+
+    /// True when a node's records were already delivered by a previous session's replay or live traffic.
+    static bool replayAlreadyDelivered(uint32_t lastHeard, uint32_t since)
+    {
+        return since != 0 && lastHeard >= kMinPlausibleEpoch && lastHeard <= since;
+    }
+
+    /// Replay cutoff for the next session: moves forward only when this session's replay finished.
+    static uint32_t nextReplaySince(uint32_t previous, bool drained, uint32_t validNow)
+    {
+        if (!drained)
+            return previous;
+        if (validNow < kMinPlausibleEpoch + kReplaySinceMarginSecs)
+            return 0; // no trusted clock: replay everything next time
+        return validNow - kReplaySinceMarginSecs;
+    }
+
     PhoneAPI();
 
     /// Destructor - calls close()

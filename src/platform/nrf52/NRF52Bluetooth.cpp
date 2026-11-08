@@ -152,6 +152,24 @@ class BluetoothPhoneAPI : public PhoneAPI
     /// Check the current underlying physical link to see if the client is currently connected
     virtual bool checkIsConnected() override { return Bluefruit.connected(connectionHandle); }
 
+    // Each FromRadio is one GATT read (~2 connection events), so the sync runs at 7.5-15 ms like the NimBLE
+    // build, then settles back to 15-30 ms. Slave latency stays 0 (see setup()). Units: 1.25 ms / 10 ms.
+    virtual void onConfigStart() override { requestConnInterval(6, 12); }
+    virtual void onConfigComplete() override { requestConnInterval(12, 24); }
+
+    static void requestConnInterval(uint16_t minUnits, uint16_t maxUnits)
+    {
+        if (!Bluefruit.connected(connectionHandle))
+            return;
+        ble_gap_conn_params_t params = {};
+        params.min_conn_interval = minUnits;
+        params.max_conn_interval = maxUnits;
+        params.slave_latency = 0;
+        params.conn_sup_timeout = 600;
+        uint32_t err = sd_ble_gap_conn_param_update(connectionHandle, &params);
+        LOG_DEBUG("BLE conn interval request %u-%u: err=%u", minUnits, maxUnits, (unsigned)err);
+    }
+
   public:
     BluetoothPhoneAPI() { api_type = TYPE_BLE; }
 };
