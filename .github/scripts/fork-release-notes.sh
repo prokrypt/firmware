@@ -10,8 +10,9 @@ prev=""
 prev_sha=""
 for tag in $(gh release list --exclude-drafts --limit 100 --json tagName -q '.[].tagName'); do
   sha=$(git rev-parse -q --verify "refs/tags/$tag^{commit}") || continue
-  if [ "$sha" != "$(git rev-parse "$ref^{commit}")" ] && git merge-base --is-ancestor "$sha" "$ref" &&
-    { [ -z "$prev_sha" ] || git merge-base --is-ancestor "$prev_sha" "$sha"; }; then
+  [ "$sha" != "$(git rev-parse "$ref^{commit}")" ] || continue
+  git merge-base --is-ancestor "$sha" "$ref" || continue
+  if [ -z "$prev_sha" ] || git merge-base --is-ancestor "$prev_sha" "$sha"; then
     prev=$tag
     prev_sha=$sha
   fi
