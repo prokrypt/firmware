@@ -1314,7 +1314,9 @@ bool TrafficManagementModule::shouldDropPosition(const meshtastic_MeshPacket *p,
     // Precision is driven by the channel's own position_precision ceiling - the same
     // grid the channel uses for broadcast. Falls back to the firmware default (19-bit,
     // ~90m cells) when the channel has no precision configured (chanPrec == 0).
-    const uint32_t chanPrec = getPositionPrecisionForChannel(p->channel);
+    // Dedup only runs on well-known (public) channels: keep its grid at the public ceiling even when our
+    // own broadcast precision on that channel is precise.
+    const uint32_t chanPrec = std::min<uint32_t>(getPositionPrecisionForChannel(p->channel), MAX_POSITION_PRECISION_PUBLIC_KEY);
     uint8_t precision = sanitizePositionPrecision(
         chanPrec > 0 ? static_cast<uint8_t>(chanPrec) : static_cast<uint8_t>(default_traffic_mgmt_position_precision_bits));
 

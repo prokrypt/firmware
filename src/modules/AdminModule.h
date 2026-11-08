@@ -170,9 +170,6 @@ static constexpr const char *licensedModeMessage =
 static constexpr const char *licensedIdentityMigrationMessage =
     "Licensed signing requires an identity key; this node identity will change after key generation";
 
-static constexpr const char *publicChannelPrecisionMessage =
-    "Precise position is not allowed on a public (open / known-key) channel; reduced to coarse precision";
-
 extern AdminModule *adminModule;
 
 void disableBluetooth();
