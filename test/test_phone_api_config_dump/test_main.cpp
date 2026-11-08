@@ -685,6 +685,25 @@ void tearDown(void)
     savedState = nullptr;
 }
 
+// Post-sync replay cutoff: unchanged nodes are not replayed to the next session.
+void test_replay_cutoff_skips_only_nodes_already_delivered()
+{
+    const uint32_t since = PhoneAPI::kMinPlausibleEpoch + 1000000;
+    TEST_ASSERT_FALSE(PhoneAPI::replayAlreadyDelivered(since - 10, 0));    // no cutoff yet: replay all
+    TEST_ASSERT_TRUE(PhoneAPI::replayAlreadyDelivered(since - 10, since)); // heard before cutoff
+    TEST_ASSERT_TRUE(PhoneAPI::replayAlreadyDelivered(since, since));      // at cutoff
+    TEST_ASSERT_FALSE(PhoneAPI::replayAlreadyDelivered(since + 1, since)); // heard after: replay
+    TEST_ASSERT_FALSE(PhoneAPI::replayAlreadyDelivered(1234, since));      // boot-relative stamp: replay
+}
+
+void test_replay_cutoff_advances_only_after_a_drained_replay()
+{
+    const uint32_t now = PhoneAPI::kMinPlausibleEpoch + 1000000;
+    TEST_ASSERT_EQUAL_UINT32(now - PhoneAPI::kReplaySinceMarginSecs, PhoneAPI::nextReplaySince(0, true, now));
+    TEST_ASSERT_EQUAL_UINT32(77u, PhoneAPI::nextReplaySince(77u, false, now)); // unfinished replay keeps the old cutoff
+    TEST_ASSERT_EQUAL_UINT32(0u, PhoneAPI::nextReplaySince(77u, true, 0));     // no trusted clock: replay all next time
+}
+
 void setup()
 {
     initializeTestEnvironment();
@@ -708,6 +727,10 @@ void setup()
     RUN_TEST(test_node_num_change_resends_my_info);
     RUN_TEST(test_node_num_change_mid_dump_restarts_sync);
     RUN_TEST(test_node_num_change_mid_nodes_only_restarts_sync);
+
+    printf("\n=== replay cutoff ===\n");
+    RUN_TEST(test_replay_cutoff_skips_only_nodes_already_delivered);
+    RUN_TEST(test_replay_cutoff_advances_only_after_a_drained_replay);
 
     exit(UNITY_END());
 }
