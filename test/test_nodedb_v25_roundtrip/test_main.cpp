@@ -499,6 +499,7 @@ static void test_packedEnvironment_savedEntryDecodesAsPlainProtobuf(void)
 {
     const uint32_t E = 0x54000103;
     addUserNode(E, 0x23);
+    TEST_ASSERT_TRUE(nodeDB->set_favorite(true, E)); // only favorites' satellites reach flash
     meshtastic_Telemetry env = meshtastic_Telemetry_init_zero;
     env.which_variant = meshtastic_Telemetry_environment_metrics_tag;
     env.variant.environment_metrics.has_temperature = true;
