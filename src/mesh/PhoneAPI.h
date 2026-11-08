@@ -126,6 +126,14 @@ class PhoneAPI
     // shortcut: one cutoff per PhoneAPI (one for all BLE phones), so a second phone misses older records until a reboot.
     uint32_t replaySince = 0;
     bool replayDrained = false; // this session's replay reached the end
+    // Fork: a nodes-since heartbeat (MeshService::HEARTBEAT_NODES_SINCE_TAG) names how long ago this client last
+    // synced; the next SPECIAL_NONCE_ONLY_NODES request then skips non-favorite nodes not heard since. One-shot.
+    bool nodesSincePending = false;
+    uint16_t nodesSinceAgeMinutes = 0;
+    // Cutoff of the running nodes-since sync (0 = full); overrides replaySince for this sync's replay.
+    uint32_t nodesSince = 0;
+
+    uint32_t replayCutoff() const { return nodesSince ? nodesSince : replaySince; }
 
     meshtastic_ToRadio toRadioScratch = {
         0}; // this is a static scratch object, any data must be copied elsewhere before returning
@@ -151,6 +159,21 @@ class PhoneAPI
     static bool replayAlreadyDelivered(uint32_t lastHeard, uint32_t since)
     {
         return since != 0 && lastHeard >= kMinPlausibleEpoch && lastHeard <= since;
+    }
+
+    /// Cutoff for a nodes-since request; the margin covers clock skew and records still queued at the last disconnect.
+    static uint32_t nodesSinceCutoff(uint16_t ageMinutes, uint32_t validNow)
+    {
+        const uint32_t back = (uint32_t)ageMinutes * 60u + kReplaySinceMarginSecs;
+        if (validNow < kMinPlausibleEpoch + back)
+            return 0; // no trusted clock: send everything
+        return validNow - back;
+    }
+
+    /// A nodes-since sync leaves out other nodes the client already has; favorites always go out.
+    static bool skipNodeInfo(bool isUs, bool isFavorite, uint32_t lastHeard, uint32_t since)
+    {
+        return !isUs && !isFavorite && replayAlreadyDelivered(lastHeard, since);
     }
 
     /// Replay cutoff for the next session: moves forward only when this session's replay finished.
