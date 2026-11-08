@@ -381,6 +381,18 @@ void nrf52FlashQuiesce()
     flash_nrf5x_flush();
 }
 
+// Fork additions the shared code calls on ARCH_NRF52 (implemented in src/platform/nrf52, not built here).
+// No fork flash_cache_override on nRF54: no flush failures are counted.
+extern "C" {
+volatile uint32_t flash_cache_flush_failures = 0;
+}
+// No retained-RAM restart flag on nRF54: every boot gets the broadcast holdoff, as before #14.
+void nrf52MarkIntentionalRestart() {}
+bool nrf52WokeIntentionally()
+{
+    return false;
+}
+
 void cpuDeepSleep(uint32_t msecToWake)
 {
 #if HAS_WIRE
