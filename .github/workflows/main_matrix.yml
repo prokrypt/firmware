@@ -686,7 +686,8 @@ jobs:
 
   publish-fork-release:
     # Fork: publish the draft once every arch zip is attached, so the Android app's updater (which can't see drafts)
-    # offers it. Skipped if any arch failed, leaving the draft for a manual look.
+    # offers it, and mark it Latest so /releases/latest and the Latest badge point at the newest build (the releases
+    # list can't sort fork tags, which all read 2.8.2.<hash>). Skipped if any arch failed, leaving the draft.
     permissions: # Needed for 'gh release edit'.
       contents: write
     runs-on: ubuntu-26.04
@@ -697,7 +698,7 @@ jobs:
     needs: [release-firmware, version]
     steps:
       - name: Publish the GitHub release
-        run: gh release edit v${{ needs.version.outputs.long }} --repo ${{ github.repository }} --draft=false
+        run: gh release edit v${{ needs.version.outputs.long }} --repo ${{ github.repository }} --draft=false --prerelease=false --latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
