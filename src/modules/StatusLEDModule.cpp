@@ -182,8 +182,8 @@ int32_t StatusLEDModule::runOnce()
     }
 #endif
 
-    // Override if disabled in config
-    if (config.device.led_heartbeat_disabled) {
+    // Override if disabled in config; the heartbeat setting only silences the idle blink, keep charge indication
+    if (config.device.led_heartbeat_disabled && power_state != charging && power_state != charged) {
         CHARGE_LED_state = LED_STATE_OFF;
     }
 #ifdef Battery_LED_1
