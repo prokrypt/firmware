@@ -155,8 +155,8 @@ extern "C" {
 #define VBAT_AR_INTERNAL AR_INTERNAL_3_0
 
 // Fitted to a measured X1 discharge (~71 h at constant load) so % falls linearly with runtime.
-// 0% stays 3100 mV: it is also the low-voltage shutdown threshold.
-#define OCV_ARRAY 4290, 4182, 4079, 3979, 3909, 3833, 3790, 3761, 3721, 3683, 3100
+// 100% = 4250 mV, where the cell settles ~1 h off the charger. 0% stays 3100 mV: low-voltage shutdown threshold.
+#define OCV_ARRAY 4250, 4169, 4066, 3969, 3892, 3828, 3788, 3760, 3719, 3682, 3100
 
 // Buzzer
 #define PIN_BUZZER (0 + 25) // P0.25, pwm output
