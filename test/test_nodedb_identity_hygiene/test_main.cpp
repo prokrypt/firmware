@@ -129,6 +129,23 @@ static void test_contact_keyless_preserves_stored_key(void)
     TEST_ASSERT_NOT_EQUAL(1000, info->last_heard);      // anti-eviction heard-now stamp instead
 }
 
+// The heard-now stamp keeps the contact from being evicted, but it is not a reception: clients are
+// still told when the node was really heard, until something is heard from it.
+static void test_contact_stamp_is_not_reported_as_heard(void)
+{
+    db->push(kPeer, 1000, /*keySeed=*/0x42);
+
+    db->addFromContact(makeContact(kPeer, "Alice", "AL"));
+    db->addFromContact(makeContact(kPeer, "Alice", "AL")); // clients repeat it before every request
+
+    meshtastic_NodeInfoLite *info = db->getMeshNode(kPeer);
+    TEST_ASSERT_NOT_EQUAL(1000, info->last_heard);
+    TEST_ASSERT_EQUAL(1000, db->lastHeardForClient(info));
+
+    info->last_heard += 60; // heard for real
+    TEST_ASSERT_EQUAL(info->last_heard, db->lastHeardForClient(info));
+}
+
 // A pre-DM contact for a node the user never favorited has nothing on disk to update: no flash write.
 static void test_contact_non_favorite_does_not_write_flash(void)
 {
@@ -579,6 +596,7 @@ IH_TEST_ENTRY void setup()
 
     printf("\n=== addFromContact guards ===\n");
     RUN_TEST(test_contact_keyless_preserves_stored_key);
+    RUN_TEST(test_contact_stamp_is_not_reported_as_heard);
     RUN_TEST(test_contact_non_favorite_does_not_write_flash);
     RUN_TEST(test_contact_favorite_writes_once_per_change);
     RUN_TEST(test_contact_new_key_updates_stored_key);

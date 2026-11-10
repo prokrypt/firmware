@@ -42,6 +42,10 @@ class SafeFile : public Print
     bool testReadback();
 
     String filename;
+#ifdef ARCH_NRF52
+    /// flash_cache_flush_failures before the file was opened (declared ahead of f: it must be read first).
+    uint32_t flushFailuresAtOpen;
+#endif
     File f;
     bool fullAtomic;
     uint8_t hash = 0;

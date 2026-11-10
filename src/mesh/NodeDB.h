@@ -388,6 +388,10 @@ class NodeDB
     /// a real last_heard epoch, never backwards, then empty the table. updateFrom() takes over.
     void backfillHeardAt();
 
+    /// last_heard as clients are told it: what it read before addFromContact's anti-eviction stamp,
+    /// while nothing has been heard from the node since that stamp.
+    uint32_t lastHeardForClient(const meshtastic_NodeInfoLite *n) const;
+
     /** Update position info for this node based on received position data
      */
     void updatePosition(uint32_t nodeId, const meshtastic_Position &p, RxSource src = RX_SRC_RADIO);
@@ -748,6 +752,17 @@ class NodeDB
     /// addFromContact's anti-eviction stamp: a real epoch when the clock is trusted, otherwise a
     /// RAM arrival stamp that evictionRecency() honours - never a boot-relative last_heard.
     void stampContactHeardNow(meshtastic_NodeInfoLite *info);
+
+    /// What stampContactHeardNow() overwrote, for lastHeardForClient(). RAM only, reuse-oldest.
+    // shortcut: 16 stamped-and-silent nodes at once; beyond that the oldest reads as heard at its stamp.
+    struct ContactStamp {
+        NodeNum num = 0;
+        uint32_t stampedAt = 0;   ///< epoch written into last_heard
+        uint32_t heardBefore = 0; ///< last_heard it replaced
+    };
+    static constexpr size_t kMaxContactStamps = 16;
+    ContactStamp contactStamps[kMaxContactStamps] = {};
+    uint8_t nextContactStamp = 0;
 
     /// Read the node's RAM arrival stamp. The boolean carries presence because uptime second 0 is valid.
     bool getHeardAtUptimeSecs(NodeNum num, uint32_t &stamp) const;

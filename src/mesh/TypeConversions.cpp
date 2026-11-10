@@ -14,7 +14,7 @@ meshtastic_NodeInfo TypeConversions::ConvertToNodeInfo(const meshtastic_NodeInfo
     // presence bit and cannot distinguish a genuine 0 dB from "unknown". nodeInfoLiteHasSnr(lite)
     // is available if a future NodeInfo revision needs to carry that distinction to clients.
     info.snr = lite->snr;
-    info.last_heard = lite->last_heard;
+    info.last_heard = nodeDB ? nodeDB->lastHeardForClient(lite) : lite->last_heard;
     info.channel = lite->channel;
     info.via_mqtt = nodeInfoLiteViaMqtt(lite);
     info.is_favorite = nodeInfoLiteIsFavorite(lite);

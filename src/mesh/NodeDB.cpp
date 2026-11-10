@@ -4653,10 +4653,30 @@ bool NodeDB::evictionRecencyOlder(EvictionRecency candidate, EvictionRecency inc
 void NodeDB::stampContactHeardNow(meshtastic_NodeInfoLite *info)
 {
     const uint32_t nowEpoch = getValidTime(RTCQualityFromNet);
-    if (nowEpoch)
-        info->last_heard = nowEpoch;
-    else
+    if (!nowEpoch) {
         recordHeardWhileClockUntrusted(info->num, Time::getUptimeSecs());
+        return;
+    }
+    // Stamped again with nothing heard in between: keep the time it was really heard.
+    ContactStamp *slot = nullptr;
+    for (auto &s : contactStamps)
+        if (s.num == info->num && s.stampedAt == info->last_heard)
+            slot = &s;
+    if (!slot) {
+        slot = &contactStamps[nextContactStamp];
+        nextContactStamp = (nextContactStamp + 1) % kMaxContactStamps;
+        *slot = {info->num, 0, info->last_heard};
+    }
+    slot->stampedAt = nowEpoch;
+    info->last_heard = nowEpoch;
+}
+
+uint32_t NodeDB::lastHeardForClient(const meshtastic_NodeInfoLite *n) const
+{
+    for (const auto &s : contactStamps)
+        if (s.num == n->num && s.stampedAt == n->last_heard)
+            return s.heardBefore;
+    return n->last_heard;
 }
 
 void NodeDB::backfillHeardAt()

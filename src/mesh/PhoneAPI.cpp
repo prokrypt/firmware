@@ -1014,7 +1014,7 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
             if (infoToSend.last_heard == 0 && infoToSend.num != nodeDB->getNodeNum()) {
                 const meshtastic_NodeInfoLite *fresh = nodeDB->getMeshNode(infoToSend.num);
                 if (fresh)
-                    infoToSend.last_heard = fresh->last_heard;
+                    infoToSend.last_heard = nodeDB->lastHeardForClient(fresh);
             }
             // Just in case we stored a different user.id in the past, but should never happen going forward
             sprintf(infoToSend.user.id, "!%08x", infoToSend.num);
