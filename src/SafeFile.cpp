@@ -41,7 +41,11 @@ static File openFile(const char *filename, bool fullAtomic)
 }
 
 SafeFile::SafeFile(const char *_filename, bool fullAtomic)
-    : filename(_filename), f(openFile(_filename, fullAtomic)), fullAtomic(fullAtomic)
+    : filename(_filename),
+#ifdef ARCH_NRF52
+      flushFailuresAtOpen(flash_cache_flush_failures),
+#endif
+      f(openFile(_filename, fullAtomic)), fullAtomic(fullAtomic)
 {
 }
 
@@ -76,18 +80,16 @@ bool SafeFile::close()
     if (!f)
         return false;
 
-#ifdef ARCH_NRF52
-    const uint32_t flushFailuresBefore = flash_cache_flush_failures;
-#endif
     spiLock->lock();
     f.close();
     spiLock->unlock();
 
 #ifdef ARCH_NRF52
-    // close() flushes the page cache, which also carries LittleFS metadata the readback below never
-    // sees. A page that would not program is a torn file system in the making: fail the save.
-    if (flash_cache_flush_failures != flushFailuresBefore) {
-        LOG_ERROR("Flash page flush failed while closing %s", filename.c_str());
+    // The page cache is flushed on every page change while writing and again by close(), and it also
+    // carries LittleFS metadata the readback below never sees. A page that would not program at any
+    // point since the file was opened is a torn file system in the making: fail the save.
+    if (flash_cache_flush_failures != flushFailuresAtOpen) {
+        LOG_ERROR("Flash page flush failed while writing %s", filename.c_str());
         return false;
     }
 #endif
