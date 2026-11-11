@@ -103,7 +103,7 @@ class Power : public concurrency::OSThread
     virtual bool setup();
     virtual int32_t runOnce() override;
     void setStatusHandler(meshtastic::PowerStatus *handler) { statusHandler = handler; }
-    const uint16_t OCV[11] = {OCV_ARRAY};
+    const uint16_t OCV[NUM_OCV_POINTS] = {OCV_ARRAY};
     bool isLowBattery() { return low_voltage_counter >= LOW_VOLTAGE_READINGS_BEFORE_SHUTDOWN; };
 
 #ifdef ARCH_ESP32
