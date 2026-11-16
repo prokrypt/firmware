@@ -751,6 +751,73 @@ void test_nodes_since_is_one_shot_and_nodes_only()
     TEST_ASSERT_EQUAL_UINT(3, again.nodeNums.size());
 }
 
+/// Node A as seedOldAndFreshNodes() left it, plus a stored position and the add_contact a client pushes
+/// before a DM, which stamps A as heard now so it is not the next node evicted.
+void giveNodeAPositionAndPushItAsContact()
+{
+    meshtastic_Position pos = meshtastic_Position_init_zero;
+    pos.has_latitude_i = true;
+    pos.latitude_i = 407000000;
+    pos.has_longitude_i = true;
+    pos.longitude_i = -740000000;
+    nodeDB->updatePosition(SEEDED_NODE_A, pos);
+
+    const uint32_t heard = nodeDB->getMeshNode(SEEDED_NODE_A)->last_heard;
+    meshtastic_SharedContact contact = meshtastic_SharedContact_init_zero;
+    contact.node_num = SEEDED_NODE_A;
+    contact.has_user = true;
+    strcpy(contact.user.long_name, "Node A");
+    strcpy(contact.user.short_name, "NA");
+    nodeDB->addFromContact(contact);
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(heard, nodeDB->getMeshNode(SEEDED_NODE_A)->last_heard, "contact was not stamped");
+}
+
+/// Drains the post-complete replay. True if it carried node A's position, with its rx_time in rxTime.
+bool replayedPositionOfNodeA(uint32_t &rxTime)
+{
+    bool found = false;
+    for (unsigned i = 0; i < 32 && api->available(); i++) {
+        meshtastic_FromRadio msg;
+        if (!readOneFromRadio(msg) || msg.which_payload_variant != meshtastic_FromRadio_packet_tag)
+            continue;
+        if (msg.packet.from == SEEDED_NODE_A && msg.packet.decoded.portnum == meshtastic_PortNum_POSITION_APP) {
+            TEST_ASSERT_TRUE_MESSAGE(msg.packet.has_rx_time, "replayed position carries no rx_time");
+            rxTime = msg.packet.rx_time;
+            found = true;
+        }
+    }
+    return found;
+}
+
+// The stamp is not a reception. A client takes a replayed record's rx_time as when its node was last heard,
+// so the replay must date it to the real reception, as the NodeInfo before it does.
+void test_replay_dates_a_stamped_contact_to_when_it_was_heard()
+{
+    const uint32_t heard = seedOldAndFreshNodes() - 2 * 3600;
+    giveNodeAPositionAndPushItAsContact();
+    startHandshake(FULL_DUMP_NONCE);
+
+    DumpTranscript t;
+    TEST_ASSERT_TRUE(drainUntilComplete(t));
+    uint32_t rxTime = 0;
+    TEST_ASSERT_TRUE_MESSAGE(replayedPositionOfNodeA(rxTime), "node A's position was not replayed");
+    TEST_ASSERT_EQUAL_UINT32(heard, rxTime);
+}
+
+// Nor does the stamp make a record new: one the client already has from before its cutoff is not sent again.
+void test_replay_skips_a_stamped_contact_the_client_already_has()
+{
+    seedOldAndFreshNodes();
+    giveNodeAPositionAndPushItAsContact();
+    sendNodesSinceHeartbeat(30); // last sync 30 min ago; A was really heard 2 h ago
+    startHandshake(SPECIAL_NONCE_ONLY_NODES);
+
+    DumpTranscript t;
+    TEST_ASSERT_TRUE(drainUntilComplete(t));
+    uint32_t rxTime = 0;
+    TEST_ASSERT_FALSE_MESSAGE(replayedPositionOfNodeA(rxTime), "a record from before the cutoff was replayed");
+}
+
 void test_nodes_since_cutoff_math()
 {
     const uint32_t now = 1800000000u;
@@ -821,6 +888,8 @@ void setup()
     RUN_TEST(test_nodes_since_keeps_favorites);
     RUN_TEST(test_nodes_since_is_one_shot_and_nodes_only);
     RUN_TEST(test_nodes_since_cutoff_math);
+    RUN_TEST(test_replay_dates_a_stamped_contact_to_when_it_was_heard);
+    RUN_TEST(test_replay_skips_a_stamped_contact_the_client_already_has);
 
     exit(UNITY_END());
 }

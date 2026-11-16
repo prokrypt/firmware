@@ -4110,6 +4110,9 @@ void NodeDB::updateFrom(const meshtastic_MeshPacket &mp)
             return;
         }
 
+        // Heard for real, even in the very second addFromContact stamped it.
+        forgetContactStamp(info->num);
+
         // Gate on has_rx_time, not truthiness - rx_time may hold an uptime-seconds placeholder.
         if (mp.has_rx_time)
             info->last_heard = mp.rx_time;
@@ -4657,18 +4660,28 @@ void NodeDB::stampContactHeardNow(meshtastic_NodeInfoLite *info)
         recordHeardWhileClockUntrusted(info->num, Time::getUptimeSecs());
         return;
     }
-    // Stamped again with nothing heard in between: keep the time it was really heard.
-    ContactStamp *slot = nullptr;
-    for (auto &s : contactStamps)
-        if (s.num == info->num && s.stampedAt == info->last_heard)
+    // The node's own slot, else the oldest one: an empty slot reads as stamped at 0, so it goes first.
+    ContactStamp *slot = &contactStamps[0];
+    for (auto &s : contactStamps) {
+        if (s.num == info->num) {
             slot = &s;
-    if (!slot) {
-        slot = &contactStamps[nextContactStamp];
-        nextContactStamp = (nextContactStamp + 1) % kMaxContactStamps;
-        *slot = {info->num, 0, info->last_heard};
+            break;
+        }
+        if (s.stampedAt < slot->stampedAt)
+            slot = &s;
     }
+    // Stamped again with nothing heard in between: keep the time it was really heard.
+    if (slot->num != info->num || slot->stampedAt != info->last_heard)
+        *slot = {info->num, 0, info->last_heard};
     slot->stampedAt = nowEpoch;
     info->last_heard = nowEpoch;
+}
+
+void NodeDB::forgetContactStamp(NodeNum num)
+{
+    for (auto &s : contactStamps)
+        if (s.num == num)
+            s = {};
 }
 
 uint32_t NodeDB::lastHeardForClient(const meshtastic_NodeInfoLite *n) const
