@@ -2597,6 +2597,18 @@ void NodeDB::nodeDBSelfCare()
                       satsTrimmed ? "yes" : "no");
 }
 
+void NodeDB::clampLoadedLoraConfig()
+{
+    // Coerce LoRa config fields derived from presets while bootstrapping.
+    // Some clients/UI components display bandwidth/spread_factor directly from config even in preset mode.
+    if (config.has_lora && config.lora.use_preset) {
+        channels.resolvePrimaryIndex();
+        // Rename a legacy "Default" primary to "" first, or the slot is hashed from "Default" instead of the preset name
+        channels.fixupChannel(channels.getPrimaryIndex());
+        RadioInterface::clampConfigLora(config.lora);
+    }
+}
+
 void NodeDB::loadFromDisk()
 {
     // Mark the current device state as completely unusable, so that if we fail reading the entire file from
@@ -2882,12 +2894,6 @@ void NodeDB::loadFromDisk()
     }
     configLoadComplete = true;
 
-    // Coerce LoRa config fields derived from presets while bootstrapping.
-    // Some clients/UI components display bandwidth/spread_factor directly from config even in preset mode.
-    if (config.has_lora && config.lora.use_preset) {
-        RadioInterface::clampConfigLora(config.lora);
-    }
-
 #if defined(USERPREFS_LORA_TX_DISABLED) && USERPREFS_LORA_TX_DISABLED
     config.lora.tx_enabled = false;
 #endif
@@ -3016,6 +3022,8 @@ void NodeDB::loadFromDisk()
             LOG_INFO("Loaded saved channelFile v%d", channelFile.version);
         }
     }
+
+    clampLoadedLoraConfig();
 
     state = loadProto(uiconfigFileName, meshtastic_DeviceUIConfig_size, sizeof(meshtastic_DeviceUIConfig),
                       &meshtastic_DeviceUIConfig_msg, &uiconfig);
