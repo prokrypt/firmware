@@ -1309,11 +1309,17 @@ void setReplayHopFields(meshtastic_MeshPacket &pkt, const meshtastic_NodeInfoLit
 /// confused with a real epoch.
 constexpr uint32_t MIN_PLAUSIBLE_EPOCH = 1577836800u;
 
-/// Not every last_heard writer gates on RTC quality - NodeDB::addFromContact stamps it with a bare
-/// getTime(), which is boot-relative seconds on a node that has never had a clock.
-bool lastHeardIsWallClock(const meshtastic_NodeInfoLite *header)
+/// When a replayed record's node was heard, as the client is told it: never addFromContact's
+/// anti-eviction stamp, which would date the record to a DM we sent - see NodeDB::lastHeardForClient().
+uint32_t replayHeardTime(const meshtastic_NodeInfoLite *header)
 {
-    return header && header->last_heard >= MIN_PLAUSIBLE_EPOCH;
+    return nodeDB->lastHeardForClient(header);
+}
+
+/// Guards rx_time against a value that is not a real epoch (0, or boot-relative seconds).
+bool isWallClock(uint32_t heard)
+{
+    return heard >= MIN_PLAUSIBLE_EPOCH;
 }
 
 } // namespace
@@ -1335,9 +1341,9 @@ meshtastic_MeshPacket PhoneAPI::makeReplayPositionPacket(const meshtastic_NodeIn
     // rx_time means "when *we* received this" - use last_heard, not the position's own GPS
     // fix time (which is often 0 and, when present, already round-trips inside the payload
     // via ConvertToPosition).
-    pkt.rx_time = header->last_heard;
-    // Present only when last_heard is a genuine epoch - see lastHeardIsWallClock().
-    pkt.has_rx_time = lastHeardIsWallClock(header);
+    pkt.rx_time = replayHeardTime(header);
+    // Present only when that is a genuine epoch - see isWallClock().
+    pkt.has_rx_time = isWallClock(pkt.rx_time);
     // Stable per-node/per-fix id: replaying the same unchanged history on every
     // reconnect must not look like a brand new packet to the phone's history/dedup.
     pkt.id = makeReplayPacketId(header->num, pkt.rx_time, meshtastic_PortNum_POSITION_APP);
@@ -1364,9 +1370,9 @@ meshtastic_MeshPacket PhoneAPI::makeReplayTelemetryPacket(const meshtastic_NodeI
     pkt.from = header->num;
     pkt.to = NODENUM_BROADCAST;
     // No native timestamp on telemetry packets here; use last_heard.
-    pkt.rx_time = header->last_heard;
-    // Present only when last_heard is a genuine epoch - see lastHeardIsWallClock().
-    pkt.has_rx_time = lastHeardIsWallClock(header);
+    pkt.rx_time = replayHeardTime(header);
+    // Present only when that is a genuine epoch - see isWallClock().
+    pkt.has_rx_time = isWallClock(pkt.rx_time);
     pkt.id = makeReplayPacketId(header->num, pkt.rx_time, meshtastic_Telemetry_device_metrics_tag);
     pkt.channel = header->channel;
     pkt.rx_snr = header->snr;
@@ -1423,7 +1429,7 @@ void PhoneAPI::prefetchReplayPositions()
             meshtastic_PositionLite pos;
             // No header means an orphan the phone cannot attribute; a failed copy means
             // the entry was evicted between snapshot and now.
-            if (!header || replayAlreadyDelivered(header->last_heard, replayCutoff()) || !nodeDB->copyNodePosition(num, pos))
+            if (!header || replayAlreadyDelivered(replayHeardTime(header), replayCutoff()) || !nodeDB->copyNodePosition(num, pos))
                 continue;
             replayQueue.push_back(makeReplayPositionPacket(header, pos));
             added = true;
@@ -1460,7 +1466,7 @@ void PhoneAPI::prefetchReplayTelemetry()
             NodeNum num = replayTelemetryOrder[replayTelemetryIndex++];
             const meshtastic_NodeInfoLite *header = nodeDB->getMeshNode(num);
             meshtastic_DeviceMetrics dm;
-            if (!header || replayAlreadyDelivered(header->last_heard, replayCutoff()) || !nodeDB->copyNodeTelemetry(num, dm))
+            if (!header || replayAlreadyDelivered(replayHeardTime(header), replayCutoff()) || !nodeDB->copyNodeTelemetry(num, dm))
                 continue;
             replayQueue.push_back(makeReplayTelemetryPacket(header, dm));
             added = true;
@@ -1477,9 +1483,9 @@ meshtastic_MeshPacket PhoneAPI::makeReplayEnvironmentPacket(const meshtastic_Nod
     meshtastic_MeshPacket pkt = meshtastic_MeshPacket_init_default;
     pkt.from = header->num;
     pkt.to = NODENUM_BROADCAST;
-    pkt.rx_time = header->last_heard;
-    // Present only when last_heard is a genuine epoch - see lastHeardIsWallClock().
-    pkt.has_rx_time = lastHeardIsWallClock(header);
+    pkt.rx_time = replayHeardTime(header);
+    // Present only when that is a genuine epoch - see isWallClock().
+    pkt.has_rx_time = isWallClock(pkt.rx_time);
     pkt.id = makeReplayPacketId(header->num, pkt.rx_time, meshtastic_Telemetry_environment_metrics_tag);
     pkt.channel = header->channel;
     pkt.rx_snr = header->snr;
@@ -1527,7 +1533,8 @@ void PhoneAPI::prefetchReplayEnvironment()
             NodeNum num = replayEnvironmentOrder[replayEnvironmentIndex++];
             const meshtastic_NodeInfoLite *header = nodeDB->getMeshNode(num);
             meshtastic_EnvironmentMetrics env;
-            if (!header || replayAlreadyDelivered(header->last_heard, replayCutoff()) || !nodeDB->copyNodeEnvironment(num, env))
+            if (!header || replayAlreadyDelivered(replayHeardTime(header), replayCutoff()) ||
+                !nodeDB->copyNodeEnvironment(num, env))
                 continue;
             replayQueue.push_back(makeReplayEnvironmentPacket(header, env));
             added = true;
@@ -1545,9 +1552,9 @@ meshtastic_MeshPacket PhoneAPI::makeReplayStatusPacket(const meshtastic_NodeInfo
     pkt.from = header->num;
     pkt.to = NODENUM_BROADCAST;
     // StatusMessage has no native timestamp; use last_heard.
-    pkt.rx_time = header->last_heard;
-    // Present only when last_heard is a genuine epoch - see lastHeardIsWallClock().
-    pkt.has_rx_time = lastHeardIsWallClock(header);
+    pkt.rx_time = replayHeardTime(header);
+    // Present only when that is a genuine epoch - see isWallClock().
+    pkt.has_rx_time = isWallClock(pkt.rx_time);
     pkt.id = makeReplayPacketId(header->num, pkt.rx_time, meshtastic_PortNum_NODE_STATUS_APP);
     pkt.channel = header->channel;
     pkt.rx_snr = header->snr;
@@ -1590,8 +1597,8 @@ void PhoneAPI::prefetchReplayStatus()
             NodeNum num = replayStatusOrder[replayStatusIndex++];
             const meshtastic_NodeInfoLite *header = nodeDB->getMeshNode(num);
             meshtastic_StatusMessage status;
-            if (!header || replayAlreadyDelivered(header->last_heard, replayCutoff()) || !nodeDB->copyNodeStatus(num, status) ||
-                status.status[0] == '\0')
+            if (!header || replayAlreadyDelivered(replayHeardTime(header), replayCutoff()) ||
+                !nodeDB->copyNodeStatus(num, status) || status.status[0] == '\0')
                 continue;
             replayQueue.push_back(makeReplayStatusPacket(header, status));
             added = true;

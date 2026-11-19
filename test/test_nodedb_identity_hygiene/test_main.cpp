@@ -55,6 +55,13 @@ class NodeDBTestShim : public NodeDB
 
     void resetRefusedIdentityNotices() { lastRefusedIdentityNoticeMs = 0; }
 
+    // The table is RAM that outlives a test here, as it outlives everything but a reboot on a device.
+    void resetContactStamps()
+    {
+        for (auto &s : contactStamps)
+            s = {};
+    }
+
 #if WARM_NODE_COUNT > 0
     void runDemote() { demoteOldestHotNodesToWarm(); }
 #endif
@@ -144,6 +151,44 @@ static void test_contact_stamp_is_not_reported_as_heard(void)
 
     info->last_heard += 60; // heard for real
     TEST_ASSERT_EQUAL(info->last_heard, db->lastHeardForClient(info));
+}
+
+// A packet that arrives in the very second of the stamp is still a reception: the stamp gives way to it
+// rather than hiding it behind the older time.
+static void test_contact_stamp_gives_way_to_a_reception_in_the_same_second(void)
+{
+    db->push(kPeer, 1000, /*keySeed=*/0x42);
+    db->addFromContact(makeContact(kPeer, "Alice", "AL"));
+    const uint32_t stamp = db->getMeshNode(kPeer)->last_heard;
+    TEST_ASSERT_EQUAL(1000, db->lastHeardForClient(db->getMeshNode(kPeer)));
+
+    meshtastic_MeshPacket heard = meshtastic_MeshPacket_init_zero;
+    heard.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+    heard.decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+    heard.from = kPeer;
+    heard.to = NODENUM_BROADCAST;
+    heard.rx_time = stamp;
+    heard.has_rx_time = true;
+    db->updateFrom(heard);
+
+    TEST_ASSERT_EQUAL(stamp, db->lastHeardForClient(db->getMeshNode(kPeer)));
+}
+
+// A node that is heard between its stamps keeps to one slot, however often it is stamped: it must not
+// work its way through the table and push out the stamp of a node that stayed silent.
+static void test_contact_stamps_take_one_slot_per_node(void)
+{
+    constexpr NodeNum kSilent = 0xE1000002;
+    db->push(kSilent, 2000, /*keySeed=*/0x43);
+    db->push(kPeer, 1000, /*keySeed=*/0x42);
+    db->addFromContact(makeContact(kSilent, "Bob", "BO"));
+
+    for (int i = 0; i < 40; i++) { // more rounds than the table has slots
+        db->addFromContact(makeContact(kPeer, "Alice", "AL"));
+        db->getMeshNode(kPeer)->last_heard += 60; // heard for real
+    }
+
+    TEST_ASSERT_EQUAL(2000, db->lastHeardForClient(db->getMeshNode(kSilent)));
 }
 
 // A pre-DM contact for a node the user never favorited has nothing on disk to update: no flash write.
@@ -569,6 +614,7 @@ void setUp(void)
     db->seedSelf();
     db->resetDuplicateWarned();
     db->resetRefusedIdentityNotices();
+    db->resetContactStamps();
 }
 
 void tearDown(void)
@@ -597,6 +643,8 @@ IH_TEST_ENTRY void setup()
     printf("\n=== addFromContact guards ===\n");
     RUN_TEST(test_contact_keyless_preserves_stored_key);
     RUN_TEST(test_contact_stamp_is_not_reported_as_heard);
+    RUN_TEST(test_contact_stamp_gives_way_to_a_reception_in_the_same_second);
+    RUN_TEST(test_contact_stamps_take_one_slot_per_node);
     RUN_TEST(test_contact_non_favorite_does_not_write_flash);
     RUN_TEST(test_contact_favorite_writes_once_per_change);
     RUN_TEST(test_contact_new_key_updates_stored_key);

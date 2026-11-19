@@ -757,16 +757,18 @@ class NodeDB
     /// RAM arrival stamp that evictionRecency() honours - never a boot-relative last_heard.
     void stampContactHeardNow(meshtastic_NodeInfoLite *info);
 
-    /// What stampContactHeardNow() overwrote, for lastHeardForClient(). RAM only, reuse-oldest.
+    /// What stampContactHeardNow() overwrote, for lastHeardForClient(). RAM only, one slot per node, reuse-oldest.
     // shortcut: 16 stamped-and-silent nodes at once; beyond that the oldest reads as heard at its stamp.
     struct ContactStamp {
-        NodeNum num = 0;
+        NodeNum num = 0;          ///< 0 == empty slot
         uint32_t stampedAt = 0;   ///< epoch written into last_heard
         uint32_t heardBefore = 0; ///< last_heard it replaced
     };
     static constexpr size_t kMaxContactStamps = 16;
     ContactStamp contactStamps[kMaxContactStamps] = {};
-    uint8_t nextContactStamp = 0;
+
+    /// The node was heard for real: its stamp no longer stands in for anything.
+    void forgetContactStamp(NodeNum num);
 
     /// Read the node's RAM arrival stamp. The boolean carries presence because uptime second 0 is valid.
     bool getHeardAtUptimeSecs(NodeNum num, uint32_t &stamp) const;
